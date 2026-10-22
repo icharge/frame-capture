@@ -87,16 +87,25 @@ const command = (value) => {
 };
 async function selectArea(image, display) {
   regionData = image.toDataURL();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    let settled = false,
+      deadline;
     const win = (overlay = new BrowserWindow({
       ...display.bounds,
       title: "Select capture area",
       frame: false,
-      resizable: false,
+      // Fixed-size frameless windows acquire incorrect borders in Windows full screen.
+      resizable: true,
       movable: false,
       show: false,
+      // Only the selector enters full screen. The library stays in the tray.
+      fullscreen: process.platform !== "darwin",
+      // Avoid creating a new macOS Space or animating a native full-screen transition.
+      simpleFullscreen: process.platform === "darwin",
       alwaysOnTop: true,
       skipTaskbar: true,
+      hasShadow: false,
+      acceptFirstMouse: true,
       backgroundColor: "#101216",
       webPreferences: {
         preload: path.join(__dirname, "overlay-preload.cjs"),
@@ -106,17 +115,40 @@ async function selectArea(image, display) {
       },
     }));
     win.setMenu(null);
-    win.setBounds(display.bounds);
+    // The default floating level stays below the Windows taskbar.
+    win.setAlwaysOnTop(true, "screen-saver");
     if (process.platform === "darwin") {
-      win.setAlwaysOnTop(true, "screen-saver");
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
+    const trusted = (event) =>
+      !win.isDestroyed() &&
+      event.sender === win.webContents &&
+      event.senderFrame === win.webContents.mainFrame;
+    const settle = (rect, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      ipcMain.removeListener("region:finish", finish);
+      ipcMain.removeListener("region:ready", ready);
+      ipcMain.removeListener("region:error", failed);
+      if (overlay === win) {
+        overlay = null;
+        regionData = null;
+      }
+      // Destroy this short-lived overlay immediately, including its full-screen state.
+      if (!win.isDestroyed()) win.destroy();
+      if (error) reject(error);
+      else resolve(rect);
+    };
+    const failed = (event) => {
+      if (trusted(event))
+        settle(
+          null,
+          Error("The capture selector could not load. Please try again."),
+        );
+    };
     const finish = (event, r) => {
-      if (
-        event.sender !== win.webContents ||
-        event.senderFrame !== win.webContents.mainFrame
-      )
-        return;
+      if (!trusted(event)) return;
       if (
         r &&
         (!["x", "y", "width", "height"].every((k) => Number.isFinite(r[k])) ||
@@ -128,25 +160,52 @@ async function selectArea(image, display) {
           r.y + r.height > 1.001)
       )
         return;
-      resolve(r);
-      win.close();
+      settle(r || null);
     };
     const ready = (event) => {
-      if (event.sender === win.webContents && !win.isDestroyed()) {
-        win.show();
-        win.focus();
-      }
+      if (!trusted(event) || settled) return;
+      clearTimeout(deadline);
+      win.show();
+      win.focus();
     };
     ipcMain.on("region:finish", finish);
     ipcMain.on("region:ready", ready);
-    win.on("closed", () => {
-      ipcMain.removeListener("region:finish", finish);
-      ipcMain.removeListener("region:ready", ready);
-      overlay = null;
-      regionData = null;
-      resolve(null);
-    });
-    win.loadFile(path.join(__dirname, "overlay.html")).catch(() => win.close());
+    ipcMain.on("region:error", failed);
+    win.once("closed", () => settle(null));
+    win.webContents.once("render-process-gone", () =>
+      settle(
+        null,
+        Error("The capture selector stopped unexpectedly. Please try again."),
+      ),
+    );
+    win.webContents.on(
+      "did-fail-load",
+      (_event, code, _description, _url, isMainFrame) => {
+        if (isMainFrame && code !== -3)
+          settle(
+            null,
+            Error("The capture selector could not load. Please try again."),
+          );
+      },
+    );
+    deadline = setTimeout(
+      () =>
+        settle(
+          null,
+          Error(
+            "The capture selector took too long to load. Please try again.",
+          ),
+        ),
+      15000,
+    );
+    win
+      .loadFile(path.join(__dirname, "overlay.html"))
+      .catch(() =>
+        settle(
+          null,
+          Error("The capture selector could not load. Please try again."),
+        ),
+      );
   });
 }
 function currentSource(available, id) {
@@ -313,7 +372,8 @@ async function capture({ mode, sourceId }) {
     }
     return { data: image.toDataURL(), ...image.getSize() };
   } catch (error) {
-    if (wasVisible) mainWindow.show();
+    // A capture started from the tray must surface its error instead of staying hidden.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
     workflow.restorePreviews();
     throw error;
   } finally {
@@ -324,6 +384,7 @@ async function capture({ mode, sourceId }) {
 async function prepareRecording(sourceId, area) {
   if (recording || capturing) throw Error("Finish the current capture first.");
   const wasVisible = mainWindow.isVisible();
+  capturing = true;
   mainWindow.hide();
   workflow?.hidePreviews();
   try {
@@ -346,7 +407,6 @@ async function prepareRecording(sourceId, area) {
     const display =
       screen.getAllDisplays().find((d) => String(d.id) === found.display_id) ||
       screen.getPrimaryDisplay();
-    capturing = true;
     const rect = await selectArea(found.thumbnail, display);
     if (!rect) {
       if (wasVisible) mainWindow.show();
@@ -356,7 +416,8 @@ async function prepareRecording(sourceId, area) {
     workflow.context({ kind: "screen", displayId: found.display_id, rect });
     return { sourceId: found.id, rect };
   } catch (error) {
-    if (wasVisible) mainWindow.show();
+    // A capture started from the tray must surface its error instead of staying hidden.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
     workflow.restorePreviews();
     throw error;
   } finally {
@@ -657,7 +718,9 @@ if (ownsProfile)
           },
         ]),
       );
-      app.on("activate", () => command("library"));
+      app.on("activate", () => {
+        if (!capturing && !recording) command("library");
+      });
     })
     .catch((error) => {
       dialog.showErrorBox("Frame could not start", error.message);

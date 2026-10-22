@@ -3,10 +3,16 @@ const shade = document.querySelector("#shade");
 const selection = document.querySelector("#selection");
 const label = document.querySelector("#size");
 let start = null;
-window.region.image().then((data) => {
-  screenImage.src = data;
-  screenImage.decode().then(() => window.region.ready());
-});
+let finishing = false;
+window.region
+  .image()
+  .then(async (data) => {
+    if (!data) throw new Error("Screen image unavailable.");
+    screenImage.src = data;
+    await screenImage.decode();
+    window.region.ready();
+  })
+  .catch(() => window.region.error());
 function bounds(event) {
   const x = Math.max(0, Math.min(innerWidth, event.clientX));
   const y = Math.max(0, Math.min(innerHeight, event.clientY));
@@ -18,7 +24,7 @@ function bounds(event) {
   };
 }
 document.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || finishing) return;
   start = { x: event.clientX, y: event.clientY };
   document.body.setPointerCapture(event.pointerId);
 });
@@ -44,18 +50,26 @@ document.addEventListener("pointerup", (event) => {
   if (!start) return;
   const r = bounds(event);
   start = null;
+  if (document.body.hasPointerCapture(event.pointerId))
+    document.body.releasePointerCapture(event.pointerId);
   if (r.width < 2 || r.height < 2) {
     selection.style.display = "none";
     shade.style.clipPath = "none";
     return;
   }
-  window.region.finish({
+  finishing = true;
+  const result = {
     x: r.x / innerWidth,
     y: r.y / innerHeight,
     width: r.width / innerWidth,
     height: r.height / innerHeight,
-  });
+  };
+  // Close only after pointer-up has released native mouse capture.
+  setTimeout(() => window.region.finish(result), 0);
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") window.region.cancel();
+  if (event.key === "Escape" && !finishing) {
+    finishing = true;
+    window.region.cancel();
+  }
 });

@@ -1,4 +1,4 @@
-# Frame 0.2.1 workflow
+# Frame 0.2.2 workflow
 
 Frame is a local capture utility with a compact library window and background tray/menu-bar controls.
 
@@ -11,6 +11,14 @@ Frame is a local capture utility with a compact library window and background tr
 - Windows control windows use `WDA_EXCLUDEFROMCAPTURE` through Electron. A native test checks decoded full-screen video pixels underneath the recorder.
 - macOS ScreenCaptureKit ignores the exclusion flag. For window recording, the bar is a separate window. For area recording, it is fixed outside the selected pixels or on another display. For full-screen recording without a spare display, controls remain in the menu bar instead. The bar is deliberately omitted when there is no safe placement. These Mac paths need native verification.
 - Export offers MP4/H.264 and WebM/VP9 in the player, capture menu, and floating video preview. Exporting the original format copies its bytes. Choosing a different format converts locally with bundled FFmpeg, preserving audio when present. No separate FFmpeg installation or upload is needed.
+
+## Full-screen capture fix in 0.2.2
+
+Area selection now uses a full-screen overlay covering the entire chosen display, including taskbar pixels. Only that temporary selector enters full screen; finishing or cancelling destroys it and leaves the library in its normal state. Windows full-screen sizing requires a resizable native window even though the selector itself has no resize UI. The selector also uses a level above the taskbar, as described by [Electron's window-level API](https://www.electronjs.org/docs/latest/api/browser-window#winsetalwaysontopflag-level-relativelevel). macOS uses simple full screen to avoid creating a separate Space; native Mac verification is pending.
+
+A selector renderer failure, failed page/image load, or startup timeout now closes the overlay, releases the capture lock and IPC listeners, and shows an error in the library. Failures started from the tray no longer leave their error hidden. Pointer capture is released before the selector closes.
+
+The new `npm run test:capture` regression verifies native hit testing at all display edges and over the taskbar, a real mouse drag across the display, the Full screen button's saved pixel dimensions, background/tray state afterward, forced selector-renderer crash recovery, failed-loader recovery, and subsequent captures. It uses an isolated test profile and synthetic fixture.
 
 ## Recorder button fix in 0.2.1
 
