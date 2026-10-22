@@ -1,6 +1,6 @@
 {
   "name": "frame-capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A local-first screenshot and screen recording workspace for macOS and Windows.",
   "author": "Frame",
   "private": true,

@@ -1,3 +1,4 @@
+const { nativeRecorderClick } = require("./native-recorder.cjs");
 const { _electron: electron, expect } = require("@playwright/test"),
   assert = require("node:assert/strict"),
   path = require("node:path"),
@@ -175,13 +176,31 @@ async function main() {
       )
       .toBe(true);
     await new Promise((r) => setTimeout(r, 1300));
+    await nativeRecorderClick(app, bar, "pause");
+    await bar
+      .getByRole("button", { name: "Resume recording", exact: true })
+      .waitFor({ timeout: 5000 });
+    const pausedTime = await bar.locator("#time").textContent();
+    await new Promise((r) => setTimeout(r, 1100));
+    assert.equal(
+      await bar.locator("#time").textContent(),
+      pausedTime,
+      "Paused timer must stay frozen.",
+    );
+    await nativeRecorderClick(app, bar, "hide");
+    await expect
+      .poll(() => app.evaluate(() => global.frameWorkflow.bar.isVisible()))
+      .toBe(false);
+    assert.equal((await mainState()).visible, false);
+    await menu("controls");
+    await nativeRecorderClick(app, bar, "pause");
     await bar
       .getByRole("button", { name: "Pause recording", exact: true })
-      .click();
+      .waitFor();
+    await nativeRecorderClick(app, bar, "pause");
     await bar
       .getByRole("button", { name: "Resume recording", exact: true })
       .waitFor();
-    await new Promise((r) => setTimeout(r, 400));
     await menu("pause");
     await bar
       .getByRole("button", { name: "Pause recording", exact: true })
@@ -233,7 +252,7 @@ async function main() {
     const convertedBytes = await fs.readFile(converted);
     assert.equal(convertedBytes.subarray(0, 4).toString("hex"), "1a45dfa3");
     console.log(
-      "PASS native selected-area recording, floating pause, tray resume/stop, cropped playback dimensions, and WebM format choice during export",
+      "PASS native selected-area recording, native floating pause/resume, frozen paused timer, hide/tray restoration, tray stop, cropped playback dimensions, and WebM format choice during export",
     );
     await page
       .getByRole("button", { name: "Close dialog", exact: true })
@@ -273,7 +292,7 @@ async function main() {
     await bar.screenshot({ path: path.join(output, "recorder-bar.png") });
     await new Promise((r) => setTimeout(r, 1700));
     const fullPreviewPromise = app.waitForEvent("window");
-    await bar.getByRole("button", { name: "Stop", exact: true }).click();
+    await nativeRecorderClick(app, bar, "stop");
     preview = await fullPreviewPromise;
     await preview.getByRole("button", { name: "Play", exact: true }).waitFor();
     captures = await page.evaluate(() => window.frame.list());
@@ -525,9 +544,7 @@ async function main() {
       .getByRole("button", { name: "Start recording", exact: true })
       .click();
     const cancelBar = await cancelBarPromise;
-    await cancelBar
-      .getByRole("button", { name: "Cancel", exact: true })
-      .click();
+    await nativeRecorderClick(app, cancelBar, "stop");
     await expect
       .poll(() => app.evaluate(() => !global.frameWorkflow.bar), {
         timeout: 10000,

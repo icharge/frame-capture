@@ -1,5 +1,6 @@
 const { _electron: electron } = require("@playwright/test");
 const assert = require("node:assert/strict");
+const { nativeRecorderClick } = require("./native-recorder.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -116,18 +117,24 @@ async function main() {
         .waitFor();
       const started = Date.now();
       await new Promise((r) => setTimeout(r, 1500));
-      await recordBar
-        .getByRole("button", { name: "Pause recording", exact: true })
-        .click();
-      await new Promise((r) => setTimeout(r, 1100));
+      await nativeRecorderClick(app, recordBar, "pause");
       await recordBar
         .getByRole("button", { name: "Resume recording", exact: true })
-        .click();
-      await new Promise((r) => setTimeout(r, 1500));
-      const videoPreviewPromise = app.waitForEvent("window");
+        .waitFor();
+      await new Promise((r) => setTimeout(r, 1100));
+      await nativeRecorderClick(app, recordBar, "pause");
       await recordBar
-        .getByRole("button", { name: "Stop", exact: true })
-        .click();
+        .getByRole("button", { name: "Pause recording", exact: true })
+        .waitFor();
+      await new Promise((r) => setTimeout(r, 1500));
+      if (format === "webm") {
+        await nativeRecorderClick(app, recordBar, "pause");
+        await recordBar
+          .getByRole("button", { name: "Resume recording", exact: true })
+          .waitFor();
+      }
+      const videoPreviewPromise = app.waitForEvent("window");
+      await nativeRecorderClick(app, recordBar, "stop");
       const videoPreview = await videoPreviewPromise;
       await videoPreview
         .getByRole("button", { name: "Play", exact: true })
@@ -307,7 +314,7 @@ async function main() {
       console.log(
         "PASS " +
           format.toUpperCase() +
-          ": native resolution, synthetic narration, paused duration, seeking, playback, correct extension, and lossless file export",
+          ": native mouse pause/resume/stop, native resolution, synthetic narration, paused duration, seeking, playback, correct extension, and lossless file export",
       );
       await page.screenshot({
         path: path.join(output, format + "-playback.png"),

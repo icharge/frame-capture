@@ -50,6 +50,7 @@ function createWorkflow({ store, command, copy, exportFile, quit }) {
       skipTaskbar: true,
       resizable: data.kind !== "recorder",
       show: false,
+      acceptFirstMouse: true,
       backgroundColor: "#f9fafc",
       webPreferences: {
         preload: path.join(__dirname, "floating-preload.cjs"),
@@ -66,7 +67,12 @@ function createWorkflow({ store, command, copy, exportFile, quit }) {
     });
     win.loadFile(path.join(__dirname, "floating.html"));
     win.once("ready-to-show", () => {
-      if (!win.isDestroyed()) win.showInactive();
+      if (!win.isDestroyed()) {
+        // Establish the recorder as the active native window. showInactive() can
+        // route its first mouse click to the previous window on Windows.
+        if (data.kind === "recorder") win.show();
+        else win.showInactive();
+      }
     });
     return win;
   }
@@ -140,7 +146,7 @@ function createWorkflow({ store, command, copy, exportFile, quit }) {
               id: "controls",
               label: "Show recorder controls",
               click: () => {
-                if (bar) bar.showInactive();
+                if (bar) bar.show();
               },
             },
           ]

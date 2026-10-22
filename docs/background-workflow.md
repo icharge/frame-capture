@@ -1,4 +1,4 @@
-# Frame 0.2.0 workflow
+# Frame 0.2.1 workflow
 
 Frame is a local capture utility with a compact library window and background tray/menu-bar controls.
 
@@ -11,6 +11,12 @@ Frame is a local capture utility with a compact library window and background tr
 - Windows control windows use `WDA_EXCLUDEFROMCAPTURE` through Electron. A native test checks decoded full-screen video pixels underneath the recorder.
 - macOS ScreenCaptureKit ignores the exclusion flag. For window recording, the bar is a separate window. For area recording, it is fixed outside the selected pixels or on another display. For full-screen recording without a spare display, controls remain in the menu bar instead. The bar is deliberately omitted when there is no safe placement. These Mac paths need native verification.
 - Export offers MP4/H.264 and WebM/VP9 in the player, capture menu, and floating video preview. Exporting the original format copies its bytes. Choosing a different format converts locally with bundled FFmpeg, preserving audio when present. No separate FFmpeg installation or upload is needed.
+
+## Recorder button fix in 0.2.1
+
+The recorder now activates when it first opens and when restored from the tray. In the Windows reproduction, showing it inactive could send the first mouse click to the previous window, leaving Pause and Stop unchanged. The main library stays hidden. macOS floating windows also accept a first click while inactive; that platform still needs native verification.
+
+The regression sends real Windows mouse input to Pause, Resume, Stop, Hide, and countdown Cancel. It checks area, screen, and MP4/WebM window recording, a frozen paused timer, tray restoration, stopping while paused, playable saved files, and exclusion of the control bar from recorded pixels. Browser-layer clicks alone did not reveal the activation failure.
 
 ## Files and editable annotations
 
