@@ -37,21 +37,19 @@ async function main() {
     });
     page.on("pageerror", (error) => errors.push(error.message));
     await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
+      .getByRole("heading", { name: /^Captures/ })
       .waitFor({ timeout: 15000 })
       .catch(async (error) => {
         console.error("Page errors:", errors);
         console.error(
           "Loaded scripts:",
-          await page
-            .locator("script")
-            .evaluateAll((scripts) =>
-              scripts.map((s) => ({
-                src: s.src,
-                nonce: s.nonce,
-                inline: s.textContent?.slice(0, 100),
-              })),
-            ),
+          await page.locator("script").evaluateAll((scripts) =>
+            scripts.map((s) => ({
+              src: s.src,
+              nonce: s.nonce,
+              inline: s.textContent?.slice(0, 100),
+            })),
+          ),
         );
         throw error;
       });

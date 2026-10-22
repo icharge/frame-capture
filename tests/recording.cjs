@@ -30,9 +30,7 @@ async function main() {
     page.setDefaultTimeout(15000);
     const failures = [];
     page.on("pageerror", (e) => failures.push(e.message));
-    await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await page.getByRole("heading", { name: /^Captures/ }).waitFor();
     await page
       .getByRole("button", { name: "Preferences", exact: true })
       .click();
@@ -108,23 +106,32 @@ async function main() {
       await page.screenshot({
         path: path.join(output, format + "-recording-options.png"),
       });
+      const recorderWindowPromise = app.waitForEvent("window");
       await page
         .getByRole("button", { name: "Start recording", exact: true })
         .click();
-      await page
+      const recordBar = await recorderWindowPromise;
+      await recordBar
         .getByRole("button", { name: "Pause recording", exact: true })
         .waitFor();
       const started = Date.now();
       await new Promise((r) => setTimeout(r, 1500));
-      await page
+      await recordBar
         .getByRole("button", { name: "Pause recording", exact: true })
         .click();
       await new Promise((r) => setTimeout(r, 1100));
-      await page
+      await recordBar
         .getByRole("button", { name: "Resume recording", exact: true })
         .click();
       await new Promise((r) => setTimeout(r, 1500));
-      await page.getByRole("button", { name: "Stop", exact: true }).click();
+      const videoPreviewPromise = app.waitForEvent("window");
+      await recordBar
+        .getByRole("button", { name: "Stop", exact: true })
+        .click();
+      const videoPreview = await videoPreviewPromise;
+      await videoPreview
+        .getByRole("button", { name: "Play", exact: true })
+        .click();
       const wallSeconds = (Date.now() - started) / 1000;
       const video = page.locator(".video-player");
       await video.waitFor();

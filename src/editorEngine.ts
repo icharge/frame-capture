@@ -21,6 +21,9 @@ export type Mark = {
   color: string;
   size: number;
   text?: string;
+  fontFamily?: string;
+  fontSize?: number;
+  fontStyle?: "regular" | "bold" | "italic" | "bold-italic";
   number?: number;
   points?: Point[];
 };
@@ -61,6 +64,21 @@ function token(name: string) {
     .getPropertyValue(name)
     .trim();
 }
+export const fontFamilies = [
+  "Inter",
+  "Arial",
+  "Georgia",
+  "Times New Roman",
+  "Courier New",
+  "monospace",
+];
+export function textFont(mark: Mark) {
+  const family = fontFamilies.includes(mark.fontFamily || "")
+    ? mark.fontFamily!
+    : "Inter";
+  const style = mark.fontStyle || "bold";
+  return `${style.includes("italic") ? "italic " : ""}${style.includes("bold") ? "600" : "400"} ${mark.fontSize || mark.size * 5 + 10}px "${family}"`;
+}
 export function bounds(mark: Mark): Rect {
   let xs = [mark.x, mark.x2],
     ys = [mark.y, mark.y2];
@@ -68,13 +86,21 @@ export function bounds(mark: Mark): Rect {
     xs = mark.points.map((p) => p.x);
     ys = mark.points.map((p) => p.y);
   }
-  if (mark.type === "text")
+  if (mark.type === "text") {
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.font = textFont(mark);
+    const lines = (mark.text || " ").split("\n");
+    const measuredWidth = Math.max(
+      ...lines.map((line) => ctx.measureText(line).width),
+    );
+    const height = mark.fontSize || mark.size * 5 + 10;
     return {
       x: mark.x,
-      y: mark.y - mark.size * 5,
-      width: (mark.text?.length || 1) * mark.size * 3.1,
-      height: mark.size * 6,
+      y: mark.y - height,
+      width: Math.max(1, measuredWidth),
+      height: height * (1.2 + 1.25 * (lines.length - 1)),
     };
+  }
   if (mark.type === "step")
     return {
       x: mark.x - mark.size * 5,
@@ -108,9 +134,11 @@ export function moveMark(mark: Mark, dx: number, dy: number): Mark {
   };
 }
 function drawMark(ctx: CanvasRenderingContext2D, m: Mark) {
-  const color = token(
-    markColors.find((c) => c.id === m.color)?.token || "--color-mark-blue",
-  );
+  const color = /^#[0-9a-f]{6}$/i.test(m.color)
+    ? m.color
+    : token(
+        markColors.find((c) => c.id === m.color)?.token || "--color-mark-blue",
+      );
   const r = bounds(m);
   ctx.save();
   ctx.strokeStyle = color;
@@ -163,8 +191,16 @@ function drawMark(ctx: CanvasRenderingContext2D, m: Mark) {
     ctx.fillStyle = token("--color-ink");
     ctx.fillRect(r.x, r.y, r.width, r.height);
   } else if (m.type === "text") {
-    ctx.font = `600 ${m.size * 5 + 10}px ${token("--font-body")}`;
-    ctx.fillText(m.text || "", m.x, m.y);
+    ctx.font = textFont(m);
+    (m.text || "")
+      .split("\n")
+      .forEach((line, index) =>
+        ctx.fillText(
+          line,
+          m.x,
+          m.y + index * (m.fontSize || m.size * 5 + 10) * 1.25,
+        ),
+      );
   } else if (m.type === "step") {
     const radius = m.size * 3 + 10;
     ctx.beginPath();
@@ -174,10 +210,10 @@ function drawMark(ctx: CanvasRenderingContext2D, m: Mark) {
       m.color === "light" || m.color === "yellow"
         ? token("--color-ink")
         : token("--color-paper");
-    ctx.font = `600 ${radius}px ${token("--font-body")}`;
+    ctx.font = `600 ${Math.min(radius, ((radius * 2) / Math.max(1, String(m.number ?? 1).length)) * 1.2)}px ${token("--font-body")}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(m.number || 1), m.x, m.y + 1);
+    ctx.fillText(String(m.number ?? 1), m.x, m.y + 1);
   }
   ctx.restore();
 }

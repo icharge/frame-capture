@@ -1,3 +1,4 @@
+import type { EditorDoc, Rect } from "./editorEngine";
 import type { RecordingFormat, RecordingQuality } from "./recording";
 
 export type Capture = {
@@ -27,6 +28,7 @@ export type CaptureInput = {
   height: number;
   thumbnail: string;
   duration?: number;
+  project?: { sourceId: string; document: EditorDoc };
 };
 export type SnippingShortcut = {
   enabled: boolean;
@@ -45,6 +47,18 @@ export type AppInfo = {
   snippingShortcut?: SnippingShortcut;
 };
 export type FrameAPI = {
+  ready(): Promise<void>;
+  hide(): Promise<void>;
+  present(id: string): Promise<void>;
+  project(id: string): Promise<{
+    sourceId: string;
+    document: EditorDoc;
+    image: { data: string; mime: string };
+  } | null>;
+  prepareRecording(
+    id: string,
+    area: boolean,
+  ): Promise<{ sourceId: string; rect?: Rect } | null>;
   info(): Promise<AppInfo>;
   setSnippingShortcut(enabled: boolean): Promise<SnippingShortcut>;
   list(): Promise<Capture[]>;
@@ -60,7 +74,14 @@ export type FrameAPI = {
     sourceId: string;
   }): Promise<{ data: string; width: number; height: number } | null>;
   recordingSource(id: string, audio: boolean): Promise<void>;
-  recordingState(state: boolean): Promise<void>;
+  recordingState(
+    state:
+      | boolean
+      | {
+          state: "idle" | "preparing" | "recording" | "paused" | "saving";
+          seconds: number;
+        },
+  ): Promise<void>;
   exportFile(
     id: string,
     format: "png" | "jpg" | "webm" | "mp4",

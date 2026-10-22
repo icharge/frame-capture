@@ -25,9 +25,7 @@ async function main() {
     page.setDefaultTimeout(15000);
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
-    await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await page.getByRole("heading", { name: /^Captures/ }).waitFor();
     const fixtures = await page.evaluate(() => {
       const canvas = document.createElement("canvas");
       canvas.width = 800;
@@ -313,6 +311,9 @@ async function main() {
     await page.waitForFunction(async () =>
       (await window.frame.list()).some((c) => c.name === "Audit png — edited"),
     );
+    await page
+      .getByRole("heading", { name: "Audit png — edited", exact: true })
+      .waitFor();
     const edited = (await page.evaluate(() => window.frame.list())).find(
       (c) => c.name === "Audit png — edited",
     );

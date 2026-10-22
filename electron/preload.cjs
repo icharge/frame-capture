@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("frame", {
+  ready: () => ipcRenderer.invoke("app:renderer-ready"),
+  hide: () => ipcRenderer.invoke("app:hide"),
+  present: (id) => ipcRenderer.invoke("capture:present", id),
+  project: (id) => ipcRenderer.invoke("capture:project", id),
+  prepareRecording: (id, area) =>
+    ipcRenderer.invoke("screen:prepare", id, area),
   info: () => ipcRenderer.invoke("app:info"),
   setSnippingShortcut: (enabled) =>
     ipcRenderer.invoke("app:snipping-shortcut", enabled),

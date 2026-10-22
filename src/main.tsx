@@ -8,6 +8,7 @@ import "@fontsource/space-grotesk/600.css";
 import App from "./App";
 import "../tokens.css";
 import "./styles.css";
+import "./workspace.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

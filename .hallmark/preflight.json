@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-22",
+  "scope": "Main window",
+  "font": {
+    "display": "Space Grotesk",
+    "body": "Inter",
+    "source": "src/main.tsx:4"
+  },
+  "palette": {
+    "theme": "Cobalt",
+    "source": "tokens.css:1"
+  },
+  "motion": "No animation dependency; existing transform/opacity interactions",
+  "spacing": "Existing named 4-point tokens",
+  "framework": "Electron + React + Vite",
+  "preserved": ["Fonts", "Palette", "Capture/editor behavior", "Local storage"],
+  "introduced": [
+    "Compact utility header",
+    "Capture action row",
+    "Single library navigation row",
+    "Quiet empty state"
+  ]
+}

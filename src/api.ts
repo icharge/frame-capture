@@ -54,7 +54,11 @@ async function request<T>(
     tx.onabort = () => reject(tx.error);
   });
 }
-type Stored = Capture & { data: string; deleted?: boolean };
+type Stored = Capture & {
+  data: string;
+  deleted?: boolean;
+  project?: CaptureInput["project"];
+};
 async function get(id: string) {
   const item = await request<Stored>("readonly", (s) => s.get(id));
   if (!item) throw new Error("Capture not found.");
@@ -67,6 +71,16 @@ function download(data: string, name: string) {
   a.click();
 }
 const browserAPI: FrameAPI = {
+  ready: async () => {},
+  hide: async () => {},
+  present: async () => {},
+  prepareRecording: async (id) => ({ sourceId: id }),
+  project: async (id) => {
+    const item = await get(id);
+    return item.project
+      ? { ...item.project, image: await browserAPI.read(item.project.sourceId) }
+      : null;
+  },
   setSnippingShortcut: async () => {
     throw new Error("Win+Shift+S is available in the Windows desktop app.");
   },
@@ -93,6 +107,7 @@ const browserAPI: FrameAPI = {
       throw new Error("Captures must be smaller than 256 MB.");
     const item: Stored = {
       id: crypto.randomUUID(),
+      project: input.project,
       name: input.name,
       kind: input.mime.startsWith("video/") ? "video" : "image",
       mime: input.mime,

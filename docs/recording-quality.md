@@ -37,7 +37,7 @@ The native test captures a dedicated window, injects a synthetic narration strea
 
 At 1080p, Compact requests 2.4 Mbps at 15 fps, Balanced 4.2 Mbps at 30 fps, and High quality 6 Mbps at 30 fps. Bitrate scales with pixel count and frame rate, with bounds to avoid extreme budgets. Microphone-only audio requests 64/96/128 kbps by preset, and enabling system audio requests at least 128 kbps. MediaRecorder treats these budgets as hints; Frame does not promise a fixed size per minute.
 
-Frame tries supported native H.264 MP4 or VP9 WebM codecs in preference order, then available fallbacks. Actual output MIME determines library storage, playback, and export extensions. MP4 is encoded directly, avoiding an extra lossy export conversion. No FFmpeg runtime, cloud, or upload service is used.
+Frame tries supported native H.264 MP4 or VP9 WebM codecs in preference order, then available fallbacks. Actual output MIME determines library storage, playback, and export extensions. MP4 is encoded directly, avoiding an extra lossy export conversion. Native recording needs no FFmpeg. Frame 0.2.0 bundles FFmpeg for optional local conversion between MP4 and WebM during export; exporting the native format still copies the original bytes. No cloud or upload service is used.
 
 For new Chromium streaming WebM recordings, Frame adds duration to the small Info header, preserving encoded clusters verbatim. It retains the existing TimestampScale and unknown-length Segment/Cluster boundaries. Unexpected header layouts are preserved rather than rewritten. The regression test ensures that adding duration leaves cluster bytes unchanged.
 

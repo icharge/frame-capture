@@ -1,4 +1,4 @@
-const { _electron: electron } = require("@playwright/test");
+const { _electron: electron, expect } = require("@playwright/test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -41,7 +41,7 @@ async function run() {
     page.setDefaultTimeout(15000);
     page.on("pageerror", (e) => failures.push(e.message));
     await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
+      .getByRole("heading", { name: /^Captures/ })
       .waitFor({ timeout: 30000 });
     await page.evaluate(() => document.fonts.ready);
     const policy = await page
@@ -216,6 +216,17 @@ async function run() {
       global.frameFixture = fixture;
     });
     await page.bringToFront();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () =>
+            (await window.frame.sources("window")).some(
+              (source) => source.name === "Frame capture fixture",
+            ),
+          ),
+        { timeout: 20000 },
+      )
+      .toBe(true);
     const source = await page.evaluate(async () => {
       const sources = await window.frame.sources("window");
       return sources.find((s) => s.name === "Frame capture fixture");
@@ -230,29 +241,37 @@ async function run() {
       "native window capture must return image pixels",
     );
     console.log("PASS native window screenshot using an isolated test window");
+    await app.evaluate(() => global.frameWorkflow.menuItem("show").click());
     await page.getByRole("button", { name: /Screen recording/ }).click();
     await page.getByRole("button", { name: "Windows", exact: true }).click();
     await page
       .getByRole("button", { name: "Frame capture fixture", exact: true })
       .click();
+    const recorderWindowPromise = app.waitForEvent("window");
     await page
       .getByRole("button", { name: "Start recording", exact: true })
       .click();
-    await page
+    const recordBar = await recorderWindowPromise;
+    await recordBar
       .getByRole("button", { name: "Pause recording", exact: true })
       .waitFor({ timeout: 15000 });
     await new Promise((r) => setTimeout(r, 1500));
-    await page
+    await recordBar
       .getByRole("button", { name: "Pause recording", exact: true })
       .click();
-    await page
+    await recordBar
       .getByRole("button", { name: "Resume recording", exact: true })
       .waitFor();
-    await page
+    await recordBar
       .getByRole("button", { name: "Resume recording", exact: true })
       .click();
     await new Promise((r) => setTimeout(r, 1500));
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    const videoPreviewPromise = app.waitForEvent("window");
+    await recordBar.getByRole("button", { name: "Stop", exact: true }).click();
+    const videoPreview = await videoPreviewPromise;
+    await videoPreview
+      .getByRole("button", { name: "Play", exact: true })
+      .click();
     await page.locator(".video-player").waitFor({ timeout: 20000 });
     const playable = await page.locator(".video-player").evaluate(async (v) => {
       if (v.readyState < 2)
@@ -307,6 +326,28 @@ async function run() {
         fullPage: true,
       });
     }
+    await page
+      .getByRole("button", { name: "Screenshots", exact: true })
+      .click();
+    assert.equal(await page.locator(".capture-card").count(), 2);
+    await page.getByRole("button", { name: "Recordings", exact: true }).click();
+    assert.equal(await page.locator(".capture-card").count(), 1);
+    await page
+      .getByRole("button", { name: "All captures", exact: true })
+      .click();
+    await page.getByRole("button", { name: "List view", exact: true }).click();
+    assert.equal(await page.locator(".list-layout .capture-card").count(), 3);
+    await page.setViewportSize({ width: 320, height: 800 });
+    const listOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > innerWidth,
+    );
+    assert.equal(listOverflow, false, "list layout must fit a narrow window");
+    await page.screenshot({
+      path: path.join(results, "responsive-list-320.png"),
+      fullPage: true,
+    });
+    await page.getByRole("button", { name: "Grid view", exact: true }).click();
+    console.log("PASS screenshot/recording tabs and narrow-window list layout");
     await page.setViewportSize({ width: 1380, height: 880 });
     console.log("PASS layouts at 320, 375, 414, 768, and 1280 pixels");
     await page.screenshot({ path: path.join(results, "03-library.png") });
@@ -320,9 +361,7 @@ async function run() {
     await app.close();
     const reopened = await electron.launch(launchOptions);
     const again = await reopened.firstWindow();
-    await again
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await again.getByRole("heading", { name: /^Captures/ }).waitFor();
     const persisted = await again.evaluate(() => window.frame.list());
     assert.equal(persisted.length, final.length);
     assert(persisted.some((c) => c.name === "Design review" && c.favorite));

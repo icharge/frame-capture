@@ -5,6 +5,7 @@ const label = document.querySelector("#size");
 let start = null;
 window.region.image().then((data) => {
   screenImage.src = data;
+  screenImage.decode().then(() => window.region.ready());
 });
 function bounds(event) {
   const x = Math.max(0, Math.min(innerWidth, event.clientX));

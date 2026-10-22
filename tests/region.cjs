@@ -19,9 +19,7 @@ async function main() {
   try {
     const page = await instance.firstWindow();
     page.setDefaultTimeout(15000);
-    await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await page.getByRole("heading", { name: /^Captures/ }).waitFor();
     const displayId = await instance.evaluate(
       async ({ BrowserWindow, screen }) => {
         const display = screen.getPrimaryDisplay();

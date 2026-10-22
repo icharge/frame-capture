@@ -69,14 +69,12 @@ async function main() {
         .count(),
       0,
     );
-    const screen = page
-      .locator(".setting-row")
-      .filter({
-        has: page.getByRole("heading", {
-          name: "Screen Recording",
-          exact: true,
-        }),
-      });
+    const screen = page.locator(".setting-row").filter({
+      has: page.getByRole("heading", {
+        name: "Screen Recording",
+        exact: true,
+      }),
+    });
     const microphone = page
       .locator(".setting-row")
       .filter({

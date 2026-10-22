@@ -22,15 +22,21 @@ Frame currently uses Electron. See [the Electron vs Tauri comparison](docs/elect
 
 All direct npm dependencies are pinned to exact stable versions verified against npm's `latest` tags on **2026-10-22**. Use `npm ci` to reproduce this dependency set. Use `npm run deps:check` to inspect current stable releases, or `npm run deps:update` to update the pins and lockfile; rerun the build and native tests after updates. These maintenance commands contact the package registry; the shipped app has no network service or uploads.
 
+## Main window
+
+Frame 0.2.0 uses a compact capture toolbar above the local library. Choose Area, Full screen, Window, or Record, then use the library tabs to browse captures, screenshots, recordings, or favorites. Search, import, and grid/list controls sit beside the library heading. Preferences, shortcuts, and quick actions are in the top-right corner.
+
+See [background capture, tray controls, and editable projects](docs/background-workflow.md) for the complete workflow and platform limits. Closing the main window keeps Frame ready in the tray.
+
 ## What works
 
 See the [feature-by-feature audit](docs/feature-audit.md) for verified behavior, partial implementations, and the local CleanShot features still missing.
 
 - Screenshot capture: select a display, capture a window, or drag an area on a frozen display overlay. Frame steps aside before capturing.
-- Screen/window recording, pause/resume, optional microphone narration, and Windows system audio. Local MP4 (H.264/AAC) and WebM (VP9/Opus) playback and export, with native resolution preserved. A recording automatically stops near 220 MB to keep memory bounded.
+- Screen/window/selected-area recording, floating recorder and tray controls, pause/resume, optional microphone narration, and Windows system audio. Local MP4 (H.264/AAC) and WebM (VP9/Opus) playback and export, with native resolution preserved. A recording automatically stops near 220 MB to keep memory bounded.
 - Image editor: arrows, rectangles, ellipses, freehand drawing, text, numbered steps, highlighting, **opaque redaction**, cropping, background colors, padding, corners, and shadows.
 - Select, move, and delete annotations; undo/redo; fit and zoom. Draft edits survive navigation within the current app session.
-- Save edited copies, preserving originals. PNG/JPEG export and image clipboard copy.
+- Save editable annotated copies, preserving originals. Reopen saved annotations after restart, change step values and their starting number, and adjust text content, family, style, size, and color. PNG/JPEG export and image clipboard copy.
 - Local library with persistent capture files, search, favorites, rename, grid/list layouts, and removal with a 10-second Undo action. Removed files remain on disk for recovery; this version does not automatically purge them.
 - Import PNG, JPEG, or WebP images through the file picker, drag-and-drop, or clipboard paste.
 - Command palette and recording/export preferences.
@@ -43,7 +49,7 @@ The default is **Compact · clear text**, **MP4**, and **15 fps**. It suits tuto
 
 Bitrate scales with the source dimensions and selected frame rate; Frame does not downscale the captured video. At 1920 × 1080, the default requests 2.4 Mbps for video and 64 kbps for narration (128 kbps when system audio is enabled). These are encoder hints, not fixed file sizes. Motion, resolution, hardware, and codec affect the result. MP4 is preferred for compatibility, with supported WebM codecs as a fallback. The library and export extension always match the actual recording format.
 
-Export copies the original encoded video without a second compression pass. New WebM recordings receive duration metadata for playback and seeking; paused time is excluded. The shipped app needs no FFmpeg installation and performs no uploads. See [the recording benchmark](docs/recording-quality.md) for measured size and text-quality results and their limits.
+Export offers MP4 and WebM. Choosing the original format copies the encoded video without a second compression pass; choosing another format converts locally with bundled FFmpeg. New WebM recordings receive duration metadata for playback and seeking; paused time is excluded. The shipped app needs no FFmpeg installation and performs no uploads. See [the recording benchmark](docs/recording-quality.md) for measured size and text-quality results and their limits.
 
 ## Shortcuts
 
@@ -114,4 +120,4 @@ The Windows shortcut helper is built from `native/windows/ShortcutHost.cs` using
 
 The dedicated recording test and benchmark require `ffmpeg` and `ffprobe` on PATH for independent decoding and analysis. They capture a test fixture and synthesize narration without accessing the physical microphone. These tools are only test prerequisites and are not required by Frame itself.
 
-Frame covers the core capture/edit/export workflow, with substantial gaps from full CleanShot parity: area video recording, screenshot self-timer, scrolling/stitch capture, OCR, Quick Access/pinned overlays, image resize/rotate, editable project files, custom key rebinding, video trimming, GIF encoding, and camera bubbles are not implemented. macOS configuration is included, but it still needs native capture and permission testing on a Mac. Windows is the platform verified in this workspace.
+Frame covers the core capture/edit/export workflow, including area video, floating previews/pinned images, tray standby, and editable annotation sidecars. Gaps from full CleanShot parity include screenshot self-timer, scrolling/stitch capture, OCR, image resize/rotate, custom key rebinding, video trimming, GIF encoding, and camera bubbles. macOS configuration is included, but it still needs native capture and permission testing on a Mac. Windows is the platform verified in this workspace.

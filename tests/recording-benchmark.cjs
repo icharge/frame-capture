@@ -21,9 +21,7 @@ async function main() {
   const rows = [];
   try {
     const page = await app.firstWindow();
-    await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await page.getByRole("heading", { name: /^Captures/ }).waitFor();
     const { recorderCandidates } = await import("../src/recording.ts");
     const compact = (format) =>
       recorderCandidates(

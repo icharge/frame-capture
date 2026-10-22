@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
+    />
+    <title>Frame controls</title>
+    <link rel="stylesheet" href="../tokens.css" />
+    <link rel="stylesheet" href="floating.css" />
+  </head>
+  <body>
+    <main id="preview" hidden>
+      <header>
+        <strong id="name"></strong
+        ><button id="close" aria-label="Close preview">×</button>
+      </header>
+      <img id="image" alt="Captured image" />
+      <div class="actions">
+        <button id="copy">Copy</button><button id="edit">Edit</button
+        ><select id="format" aria-label="Video export format" hidden>
+          <option value="mp4">MP4</option>
+          <option value="webm">WebM</option></select
+        ><button id="export">Save as…</button><button id="pin">Pin</button>
+      </div>
+    </main>
+    <main id="recorder" hidden>
+      <span class="dot"></span><strong id="time">00:00</strong
+      ><span id="state">Recording</span
+      ><button id="pause" aria-label="Pause recording">Pause</button
+      ><button id="stop">Stop</button
+      ><button
+        id="hide"
+        aria-label="Hide recorder controls"
+        title="Control recording from the tray"
+      >
+        ×
+      </button>
+    </main>
+    <p id="error" role="status"></p>
+    <script src="floating.js"></script>
+  </body>
+</html>

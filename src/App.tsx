@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Aperture,
   Scan,
   Monitor,
   AppWindow,
@@ -9,8 +8,6 @@ import {
   Star,
   Settings2,
   FolderOpen,
-  Plus,
-  ArrowUpRight,
   ArrowRight,
   Upload,
   Search,
@@ -34,10 +31,9 @@ import {
   Mic,
   Volume2,
   SlidersHorizontal,
-  Sparkles,
   HardDrive,
-  ChevronRight,
   RefreshCw,
+  PanelBottomClose,
 } from "lucide-react";
 import {
   api,
@@ -67,6 +63,8 @@ import type {
   PermissionKind,
 } from "./types";
 import Editor from "./Editor";
+import type { Rect } from "./editorEngine";
+import { cropRecording } from "./recordingArea";
 import { Modal, Spinner } from "./components";
 
 type CaptureMode = "region" | "screen" | "window" | "record";
@@ -139,6 +137,13 @@ export default function App() {
     commandsRef = useRef<(command: string) => void>(() => {}),
     recordingClock = useRef(new RecordingClock()),
     importing = useRef(false);
+  const cropCleanup = useRef<(() => void) | null>(null),
+    cancelRecording = useRef(false);
+  const [videoExportFormat, setVideoExportFormat] = useState<"mp4" | "webm">(
+      "mp4",
+    ),
+    [exportTarget, setExportTarget] = useState<Capture | null>(null),
+    [exportBusy, setExportBusy] = useState(false);
   const [shortcutBusy, setShortcutBusy] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState<PermissionKind | null>(
     null,
@@ -194,6 +199,11 @@ export default function App() {
     [],
   );
   const openCapture = async (capture: Capture) => {
+    setVideoExportFormat(capture.mime === "video/webm" ? "webm" : "mp4");
+    if (video) {
+      URL.revokeObjectURL(video.url);
+      setVideo(null);
+    }
     if (capture.kind === "image") {
       setSelected(capture);
       setView("editor");
@@ -367,11 +377,14 @@ export default function App() {
           stream.getTracks().forEach((t) => t.stop());
         }
       }
-      if (shot)
-        await saveImage(
+      if (shot) {
+        const capture = await saveImage(
           shot.data,
           `${mode === "region" ? "Area" : mode === "window" ? "Window" : "Screenshot"} · ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
+          !desktop,
         );
+        if (desktop) await api.present(capture.id);
+      }
       if (!desktop && shot && mode === "region")
         notify("Screen captured. Use the Crop tool to select your area.");
     } catch (e) {
@@ -390,6 +403,7 @@ export default function App() {
     else void screenshot(mode);
   }
   function stopRecording() {
+    cancelRecording.current = true;
     if (recorder.current && recorder.current.state !== "inactive") {
       recordingClock.current.stop();
       setRecordState("saving");
@@ -403,9 +417,11 @@ export default function App() {
     recordStream.current = null;
     microphone.current = null;
     audioContext.current = null;
-    void api.recordingState(false);
+    cropCleanup.current?.();
+    cropCleanup.current = null;
   }
-  async function startRecording(sourceId: string) {
+  async function startRecording(sourceId: string, area = false) {
+    cancelRecording.current = false;
     setChooser(null);
     setBusy(true);
     let stream: MediaStream | null = null;
@@ -422,6 +438,14 @@ export default function App() {
             "Microphone access is required for narration. Allow Frame in System Settings → Privacy & Security → Microphone, then restart Frame or turn narration off.",
           );
       }
+      let rect: Rect | undefined;
+      if (desktop) {
+        const prepared = await api.prepareRecording(sourceId, area);
+        if (!prepared) return;
+        sourceId = prepared.sourceId;
+        rect = prepared.rect;
+        await api.recordingState({ state: "preparing", seconds: 0 });
+      }
       if (desktop)
         await api.recordingSource(
           sourceId,
@@ -437,9 +461,18 @@ export default function App() {
         audio: settings.systemAudio && info?.platform !== "darwin",
       });
       recordStream.current = stream;
+      stream.getVideoTracks()[0].onended = stopRecording;
       stream.getVideoTracks().forEach((track) => {
         track.contentHint = "detail";
       });
+      if (rect) {
+        const cropped = await cropRecording(stream, rect, settings.fps);
+        stream = cropped.stream;
+        cropCleanup.current = cropped.dispose;
+        stream
+          .getVideoTracks()
+          .forEach((track) => (track.contentHint = "detail"));
+      }
       if (settings.microphone) {
         microphone.current = await navigator.mediaDevices.getUserMedia({
           audio: true,
@@ -478,7 +511,9 @@ export default function App() {
       v.pause();
       v.srcObject = null;
       for (let n = settings.countdown; n > 0; n--) {
+        if (cancelRecording.current) throw new Error("Recording cancelled.");
         setCountdown(n);
+        await api.recordingState({ state: "preparing", seconds: n });
         await new Promise((r) => setTimeout(r, 1000));
         if (
           !stream.getVideoTracks()[0]?.readyState ||
@@ -487,6 +522,7 @@ export default function App() {
           throw new Error("Screen sharing ended before recording started.");
       }
       setCountdown(null);
+      if (cancelRecording.current) throw new Error("Recording cancelled.");
       let selectedRecorder: MediaRecorder | null = null;
       for (const options of recorderCandidates(
         {
@@ -547,11 +583,13 @@ export default function App() {
           });
           await refresh();
           setView("videos");
-          await openCapture(capture);
+          if (desktop) await api.present(capture.id);
+          else await openCapture(capture);
         } catch (e) {
           error((e as Error).message);
         } finally {
           setRecordState("idle");
+          await api.recordingState({ state: "idle", seconds: 0 });
           recorder.current = null;
           setBusy(false);
         }
@@ -561,12 +599,17 @@ export default function App() {
       setSeconds(0);
       mr.start(1000);
       setRecordState("recording");
-      await api.recordingState(true);
+      await api.recordingState({ state: "recording", seconds: 0 });
     } catch (e) {
       cleanupRecording();
       setCountdown(null);
-      if ((e as Error).name !== "NotAllowedError") error((e as Error).message);
+      if (
+        (e as Error).name !== "NotAllowedError" &&
+        (e as Error).message !== "Recording cancelled."
+      )
+        error((e as Error).message);
       setRecordState("idle");
+      await api.recordingState({ state: "idle", seconds: 0 });
     } finally {
       setBusy(false);
     }
@@ -585,7 +628,36 @@ export default function App() {
       setRecordState("recording");
     }
   }
+  useEffect(() => {
+    if (recordState !== "idle")
+      void api
+        .recordingState({ state: recordState, seconds })
+        .catch((e) => error(e.message));
+  }, [recordState, seconds]);
   commandsRef.current = (command) => {
+    if (command.startsWith("open:")) {
+      const capture = items.find((c) => c.id === command.slice(5));
+      if (capture) void openCapture(capture);
+      return;
+    }
+    if (command === "library") {
+      nav("all");
+      return;
+    }
+    if (command === "pause-recording") {
+      pauseRecording();
+      return;
+    }
+    if (command === "record-area") {
+      if (!busy && recordState === "idle" && countdown === null)
+        void startRecording("cursor", true);
+      return;
+    }
+    if (command === "quick-screen") {
+      if (!busy && recordState === "idle" && countdown === null)
+        void screenshot("screen", "cursor");
+      return;
+    }
     if (command === "shortcuts-changed")
       void api
         .info()
@@ -609,7 +681,11 @@ export default function App() {
     else if (["region", "screen", "window", "record"].includes(command))
       action(command as CaptureMode);
   };
-  useEffect(() => api.onCommand((command) => commandsRef.current(command)), []);
+  useEffect(() => {
+    const stop = api.onCommand((command) => commandsRef.current(command));
+    void api.ready();
+    return stop;
+  }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -649,24 +725,40 @@ export default function App() {
       error((e as Error).message);
     }
   }
-  async function exportCapture(c: Capture) {
+  async function exportCapture(c: Capture, format?: "mp4" | "webm") {
+    if (c.kind === "video" && !format) {
+      setVideoExportFormat(c.mime === "video/mp4" ? "mp4" : "webm");
+      setExportTarget(c);
+      return;
+    }
+    if (exportBusy) return;
+    setExportBusy(true);
     try {
       if (
         await api.exportFile(
           c.id,
-          c.kind === "video"
-            ? c.mime === "video/mp4"
-              ? "mp4"
-              : "webm"
-            : settings.format,
+          c.kind === "video" ? format! : settings.format,
         )
-      )
+      ) {
         notify("Capture exported to your chosen file.");
+        setExportTarget(null);
+      }
     } catch (e) {
       error((e as Error).message);
+    } finally {
+      setExportBusy(false);
     }
   }
   const nav = (next: View) => {
+    if (video) {
+      URL.revokeObjectURL(video.url);
+      setVideo(null);
+    }
+    setChooser(null);
+    setRename(null);
+    setHelp(false);
+    setPalette(false);
+    if (!exportBusy) setExportTarget(null);
     setView(next);
     setSearch("");
     setFilter("all");
@@ -679,13 +771,6 @@ export default function App() {
       (filter === "all" || c.kind === filter) &&
       c.name.toLowerCase().includes(search.toLowerCase()),
   );
-  const titles: Record<string, string> = {
-    all: "All captures",
-    images: "Screenshots",
-    videos: "Recordings",
-    favorites: "Favorites",
-    settings: "Preferences",
-  };
   const commandList = [
     { name: "Capture an area", hint: "⌘/Ctrl ⇧ 2", fn: () => action("region") },
     {
@@ -705,7 +790,7 @@ export default function App() {
   ].filter((c) => c.name.toLowerCase().includes(commandSearch.toLowerCase()));
   return (
     <div
-      className="app"
+      className="app minimal-workspace"
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer.types).includes("Files"))
           e.preventDefault();
@@ -727,117 +812,82 @@ export default function App() {
           if (file) void importImage(file);
         }}
       />
-      <aside className="sidebar">
+      <header className="app-header">
         <a
           href="#"
           className="brand"
+          aria-label="Frame home"
           onClick={(e) => {
             e.preventDefault();
             nav("all");
           }}
-          aria-label="Frame home"
         >
           <span className="brand-mark">
-            <Scan size={23} strokeWidth={2.5} />
+            <Scan size={20} strokeWidth={2.3} />
           </span>
           <span>
             frame<span className="brand-period">.</span>
           </span>
         </a>
-        <button
-          className="command-trigger"
-          onClick={() => {
-            setPalette(true);
-            setCommandSearch("");
-            setCommandIndex(0);
-          }}
-        >
-          <Search size={15} />
-          <span>Quick actions</span>
-          <kbd>{info?.platform === "darwin" ? "⌘" : "Ctrl"} K</kbd>
-        </button>
-        <div className="nav-caption">Workspace</div>
-        <nav className="main-nav" aria-label="Capture library">
-          {(
-            [
-              {
-                id: "all",
-                label: "All captures",
-                icon: Grid2X2,
-                count: items.length,
-              },
-              {
-                id: "images",
-                label: "Screenshots",
-                icon: ImageIcon,
-                count: items.filter((c) => c.kind === "image").length,
-              },
-              {
-                id: "videos",
-                label: "Recordings",
-                icon: Video,
-                count: items.filter((c) => c.kind === "video").length,
-              },
-              {
-                id: "favorites",
-                label: "Favorites",
-                icon: Star,
-                count: items.filter((c) => c.favorite).length,
-              },
-            ] as const
-          ).map((n) => (
+        <span className="device-status">
+          <HardDrive size={14} /> Stored on this device
+        </span>
+        <div className="app-header-actions">
+          {desktop && (
             <button
-              key={n.id}
-              className={`nav-item ${view === n.id ? "active" : ""}`}
-              onClick={() => nav(n.id)}
+              className="icon-button"
+              aria-label="Hide to tray"
+              title="Keep Frame ready in the tray"
+              onClick={() => void api.hide()}
             >
-              <n.icon size={18} />
-              <span>{n.label}</span>
-              <span className="nav-count">{n.count}</span>
+              <PanelBottomClose size={18} />
             </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="local-card">
-            <span className="local-icon">
-              <HardDrive size={19} />
-            </span>
-            <strong>Made to stay local</strong>
-            <p>
-              Your captures. Your device.
-              <br />
-              No account required.
-            </p>
-            <div>
-              <span className="status-dot" />
-              All files stored locally
-            </div>
-          </div>
+          )}
+          {(view === "settings" || view === "editor") && (
+            <button
+              className="button library-return"
+              aria-label="All captures"
+              title="All captures"
+              onClick={() => nav("all")}
+            >
+              <Grid2X2 size={16} /> All captures
+            </button>
+          )}
           <button
-            className={`nav-item ${view === "settings" ? "active" : ""}`}
+            className="icon-button"
+            aria-label="Quick actions"
+            title={
+              info?.platform === "darwin"
+                ? "Quick actions (⌘ K)"
+                : "Quick actions (Ctrl K)"
+            }
+            onClick={() => {
+              setPalette(true);
+              setCommandSearch("");
+              setCommandIndex(0);
+            }}
+          >
+            <Command size={18} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="Help and shortcuts"
+            title="Help & shortcuts"
+            onClick={() => setHelp(true)}
+          >
+            <Keyboard size={18} />
+          </button>
+          <button
+            className={`icon-button ${view === "settings" ? "is-current" : ""}`}
+            aria-label="Preferences"
+            title="Preferences"
+            aria-pressed={view === "settings"}
             onClick={() => nav("settings")}
           >
             <Settings2 size={18} />
-            <span>Preferences</span>
           </button>
-          <button className="nav-item" onClick={() => setHelp(true)}>
-            <CircleHelp size={18} />
-            <span>Help & shortcuts</span>
-            <ArrowUpRight size={14} />
-          </button>
-          <div className="platform-label">
-            <Aperture size={15} />
-            <span>
-              {info?.platform === "darwin"
-                ? "Frame for macOS"
-                : info?.platform === "win32"
-                  ? "Frame for Windows"
-                  : "Frame · Browser preview"}
-            </span>
-            <span>v{info?.version || __APP_VERSION__}</span>
-          </div>
         </div>
-      </aside>
+      </header>
       <main className={`main ${view === "editor" ? "main-editor" : ""}`}>
         {view === "editor" && selected ? (
           <Editor
@@ -852,33 +902,12 @@ export default function App() {
           />
         ) : (
           <>
-            <header className="topbar">
-              <div className="breadcrumb">
-                <span>Workspace</span>
-                <ChevronRight size={14} />
-                <strong>{titles[view]}</strong>
-              </div>
-              <div className="topbar-right">
-                <span className="local-status">
-                  <ShieldCheck size={15} />
-                  Local workspace
-                </span>
-                <button
-                  className="icon-button"
-                  title="Help & shortcuts"
-                  aria-label="Help and shortcuts"
-                  onClick={() => setHelp(true)}
-                >
-                  <Keyboard size={18} />
-                </button>
-              </div>
-            </header>
             {view === "settings" ? (
               <div className="settings-page">
                 <div className="page-heading">
                   <div>
-                    <h1>Make yourself at home.</h1>
-                    <p>A few preferences for the way you capture.</p>
+                    <h1>Preferences</h1>
+                    <p>Capture, recording, and keyboard settings.</p>
                   </div>
                 </div>
                 <div className="settings-section">
@@ -1173,136 +1202,53 @@ export default function App() {
                       : "Global shortcuts are available in the desktop app."}
                   </p>
                 </div>
+                <p className="settings-note app-version">
+                  Frame {info?.version || __APP_VERSION__} ·{" "}
+                  {info?.platform === "darwin"
+                    ? "macOS"
+                    : info?.platform === "win32"
+                      ? "Windows"
+                      : "Browser preview"}
+                </p>
               </div>
             ) : (
               <div className="workspace-content">
-                <div className="page-heading">
-                  <div>
-                    <div className="greeting">
-                      <span className="tiny-mark" />A clear view of your work
-                    </div>
-                    <h1>
-                      {view === "all"
-                        ? "Good work. Worth capturing."
-                        : titles[view]}
-                    </h1>
-                    <p>
-                      {view === "all"
-                        ? "Catch a detail. Tell the whole story. Keep it right here."
-                        : view === "favorites"
-                          ? "The captures you want to keep close."
-                          : view === "videos"
-                            ? "Walk someone through it, one recording at a time."
-                            : "Every detail, ready for your next conversation."}
-                    </p>
-                  </div>
+                <section className="capture-toolbar" aria-label="Capture tools">
                   <button
-                    className="button import-button"
-                    onClick={() => fileInput.current?.click()}
-                    disabled={busy}
+                    className="button primary capture-area"
+                    onClick={() => action("region")}
+                    disabled={busy || recordState !== "idle"}
                   >
-                    <Upload size={16} />
-                    Import image
+                    <Scan size={18} />
+                    <span>Capture an area</span>
+                    <kbd>{info?.platform === "darwin" ? "⌘" : "Ctrl"} ⇧ 2</kbd>
                   </button>
-                </div>
-                {view === "all" && (
-                  <div className="capture-launcher">
-                    <div className="capture-main">
-                      <div className="capture-main-copy">
-                        <div className="capture-label">
-                          <span className="capture-icon">
-                            <Scan size={24} />
-                          </span>
-                          <span>Start with a screenshot</span>
-                        </div>
-                        <h2>
-                          Big ideas.
-                          <br />
-                          Small details.
-                        </h2>
-                        <p>
-                          Capture exactly what you need,
-                          <br />
-                          then make your point.
-                        </p>
-                        <button
-                          className="button primary"
-                          onClick={() => action("region")}
-                          disabled={busy || recordState !== "idle"}
-                        >
-                          <Plus size={17} />
-                          Capture an area{" "}
-                          <kbd>
-                            {info?.platform === "darwin" ? "⌘" : "Ctrl"} ⇧ 2
-                          </kbd>
-                        </button>
-                      </div>
-                      <div className="capture-art" aria-hidden="true">
-                        <div className="art-grid" />
-                        <div className="art-selection">
-                          <span className="corner tl" />
-                          <span className="corner tr" />
-                          <span className="corner bl" />
-                          <span className="corner br" />
-                          <span className="art-sun" />
-                          <div className="art-mountain back" />
-                          <div className="art-mountain front" />
-                          <div className="art-cursor">
-                            <MouseCursor />
-                          </div>
-                          <span className="art-dimensions">640 × 480</span>
-                        </div>
-                        <span className="art-note">
-                          Every pixel has a point.
-                        </span>
-                      </div>
-                    </div>
-                    <div className="capture-secondary">
-                      <button
-                        className="capture-option"
-                        onClick={() => action("screen")}
-                        disabled={busy || recordState !== "idle"}
-                      >
-                        <span className="capture-option-icon">
-                          <Monitor size={22} />
-                        </span>
-                        <span>
-                          <strong>Full screen</strong>
-                          <small>The whole picture.</small>
-                        </span>
-                        <ArrowUpRight size={17} />
-                      </button>
-                      <button
-                        className="capture-option"
-                        onClick={() => action("window")}
-                        disabled={busy || recordState !== "idle"}
-                      >
-                        <span className="capture-option-icon">
-                          <AppWindow size={22} />
-                        </span>
-                        <span>
-                          <strong>Window</strong>
-                          <small>One app. In focus.</small>
-                        </span>
-                        <ArrowUpRight size={17} />
-                      </button>
-                      <button
-                        className="capture-option record-option"
-                        onClick={() => action("record")}
-                        disabled={busy || recordState !== "idle"}
-                      >
-                        <span className="capture-option-icon">
-                          <Video size={22} />
-                        </span>
-                        <span>
-                          <strong>Screen recording</strong>
-                          <small>Show how it happens.</small>
-                        </span>
-                        <ArrowUpRight size={17} />
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  <button
+                    className="button capture-tool"
+                    onClick={() => action("screen")}
+                    disabled={busy || recordState !== "idle"}
+                  >
+                    <Monitor size={18} />
+                    <span>Full screen</span>
+                  </button>
+                  <button
+                    className="button capture-tool"
+                    onClick={() => action("window")}
+                    disabled={busy || recordState !== "idle"}
+                  >
+                    <AppWindow size={18} />
+                    <span>Window</span>
+                  </button>
+                  <button
+                    className="button capture-tool"
+                    aria-label="Screen recording"
+                    onClick={() => action("record")}
+                    disabled={busy || recordState !== "idle"}
+                  >
+                    <Video size={18} />
+                    <span>Record</span>
+                  </button>
+                </section>
                 {!desktop && (
                   <div className="preview-note">
                     <Monitor size={16} />
@@ -1313,18 +1259,19 @@ export default function App() {
                   </div>
                 )}
                 <div className="library-heading">
-                  <div>
-                    <h2>
-                      {view === "all" ? "Your capture library" : titles[view]}{" "}
-                      <span>{visible.length}</span>
-                    </h2>
-                    <p>
-                      {items.length
-                        ? "A little context, always within reach."
-                        : "Your next good idea starts here."}
-                    </p>
-                  </div>
+                  <h1>
+                    Captures{" "}
+                    <span className="library-count">{visible.length}</span>
+                  </h1>
                   <div className="library-tools">
+                    <button
+                      className="button import-button"
+                      onClick={() => fileInput.current?.click()}
+                      disabled={busy}
+                    >
+                      <Upload size={15} /> Import image
+                    </button>
+
                     <div className="search-field">
                       <Search size={16} />
                       <input
@@ -1367,31 +1314,40 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                {(view === "all" || view === "favorites") && (
-                  <div
-                    className="filter-tabs"
-                    role="group"
-                    aria-label="Filter captures"
-                  >
-                    {[
-                      { id: "all", label: "Everything" },
-                      { id: "image", label: "Screenshots" },
-                      { id: "video", label: "Recordings" },
-                    ].map((t) => (
+                <div className="library-navigation">
+                  <nav className="library-tabs" aria-label="Capture library">
+                    {(
+                      [
+                        { id: "all", label: "All captures" },
+                        { id: "images", label: "Screenshots" },
+                        { id: "videos", label: "Recordings" },
+                        { id: "favorites", label: "Favorites" },
+                      ] as const
+                    ).map((n) => (
                       <button
-                        key={t.id}
-                        aria-pressed={filter === t.id}
-                        className={filter === t.id ? "active" : ""}
-                        onClick={() => setFilter(t.id)}
+                        key={n.id}
+                        aria-current={view === n.id ? "page" : undefined}
+                        className={view === n.id ? "active" : ""}
+                        onClick={() => nav(n.id)}
                       >
-                        {t.label}
+                        {n.label}
                       </button>
                     ))}
-                    <span className="sort-label">
-                      Newest first <ChevronDown size={13} />
-                    </span>
-                  </div>
-                )}
+                  </nav>
+                  {view === "favorites" ? (
+                    <select
+                      aria-label="Filter favorites"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                    >
+                      <option value="all">All types</option>
+                      <option value="image">Screenshots</option>
+                      <option value="video">Recordings</option>
+                    </select>
+                  ) : (
+                    <span className="library-order">Newest first</span>
+                  )}
+                </div>
                 {loading ? (
                   <div className="empty-state">
                     <Spinner label="Opening your library…" />
@@ -1427,7 +1383,7 @@ export default function App() {
                     <Search size={28} />
                     <h3>
                       {view === "favorites" && !search
-                        ? "Keep your best work close."
+                        ? "No favorites yet"
                         : "No matching captures."}
                     </h3>
                     <p>
@@ -1448,19 +1404,12 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="first-capture">
-                    <div className="first-capture-graphic">
-                      <div className="stack-sheet sheet-back" />
-                      <div className="stack-sheet sheet-front">
-                        <Scan size={34} />
-                        <span>Ready when you are.</span>
-                      </div>
-                    </div>
+                    <span className="empty-capture-icon" aria-hidden="true">
+                      <Scan size={30} strokeWidth={1.3} />
+                    </span>
                     <div>
-                      <h3>A fresh canvas for your work.</h3>
-                      <p>
-                        Take a screenshot, drop in an image, or try the editor
-                        with a practice image.
-                      </p>
+                      <h3>No captures yet</h3>
+                      <p>Capture your screen or drop an image here.</p>
                       <div className="first-capture-actions">
                         <button
                           className="text-button"
@@ -1482,21 +1431,10 @@ export default function App() {
                         >
                           Try the editor <ArrowRight size={15} />
                         </button>
-                        <span>or drag an image here</span>
                       </div>
                     </div>
                   </div>
                 )}
-                <footer className="workspace-footer">
-                  <span>
-                    <ShieldCheck size={14} /> Yours, from capture to export.
-                  </span>
-                  <span>
-                    Made for Windows & macOS{" "}
-                    <span className="footer-dot">·</span> No cloud. Just
-                    clarity.
-                  </span>
-                </footer>
               </div>
             )}
           </>
@@ -1509,9 +1447,9 @@ export default function App() {
           settings={settings}
           setSettings={setSettings}
           onClose={() => setChooser(null)}
-          onChoose={(id) =>
+          onChoose={(id, area) =>
             chooser === "record"
-              ? void startRecording(id)
+              ? void startRecording(id, area)
               : void screenshot(chooser, id)
           }
         />
@@ -1573,12 +1511,70 @@ export default function App() {
               {video.capture.mime === "video/mp4" ? "MP4" : "WebM"} ·{" "}
               {formatBytes(video.capture.bytes)}
             </span>
+            <select
+              aria-label="Export video format"
+              value={videoExportFormat}
+              disabled={exportBusy}
+              onChange={(e) =>
+                setVideoExportFormat(e.target.value as "mp4" | "webm")
+              }
+            >
+              <option value="mp4">MP4 · H.264</option>
+              <option value="webm">WebM · VP9</option>
+            </select>
             <button
+              disabled={exportBusy}
               className="button primary"
-              onClick={() => void exportCapture(video.capture)}
+              onClick={() =>
+                void exportCapture(video.capture, videoExportFormat)
+              }
             >
               <Download size={16} />
-              Export video
+              {exportBusy ? "Exporting…" : "Export video"}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {exportTarget && (
+        <Modal
+          title="Export recording"
+          onClose={() => {
+            if (!exportBusy) setExportTarget(null);
+          }}
+        >
+          <label className="field-label" htmlFor="export-video-type">
+            Video format
+          </label>
+          <select
+            id="export-video-type"
+            value={videoExportFormat}
+            disabled={exportBusy}
+            onChange={(e) =>
+              setVideoExportFormat(e.target.value as "mp4" | "webm")
+            }
+          >
+            <option value="mp4">MP4 · H.264</option>
+            <option value="webm">WebM · VP9</option>
+          </select>
+          <p className="settings-note">
+            Conversion runs locally. The original recording is preserved.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button"
+              disabled={exportBusy}
+              onClick={() => setExportTarget(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              disabled={exportBusy}
+              onClick={() =>
+                void exportCapture(exportTarget, videoExportFormat)
+              }
+            >
+              {exportBusy ? "Exporting…" : "Export video"}
             </button>
           </div>
         </Modal>
@@ -1689,7 +1685,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {recordState !== "idle" && (
+      {!desktop && recordState !== "idle" && (
         <div className="recording-controls" role="status">
           <span
             className={`record-dot ${recordState === "paused" ? "paused" : ""}`}
@@ -1777,19 +1773,6 @@ function Setting({
       </div>
       {children}
     </div>
-  );
-}
-function MouseCursor() {
-  return (
-    <svg width="36" height="42" viewBox="0 0 36 42" fill="none">
-      <path
-        d="M5 3L30 24L19 26L13 37L5 3Z"
-        fill="var(--color-ink)"
-        stroke="var(--color-paper)"
-        strokeWidth="2.5"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 function CaptureCard({
@@ -1940,7 +1923,7 @@ function SourceChooser({
   settings: Settings;
   setSettings: (s: Settings) => void;
   onClose: () => void;
-  onChoose: (id: string) => void;
+  onChoose: (id: string, area?: boolean) => void;
 }) {
   const [type, setType] = useState<"screen" | "window">(
       mode === "window" ? "window" : "screen",
@@ -1949,7 +1932,8 @@ function SourceChooser({
     [selected, setSelected] = useState(""),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
-  const [revision, setRevision] = useState(0);
+  const [revision, setRevision] = useState(0),
+    [area, setArea] = useState(false);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -1997,16 +1981,31 @@ function SourceChooser({
         {mode === "record" ? (
           <div className="filter-tabs">
             <button
-              className={type === "screen" ? "active" : ""}
-              onClick={() => setType("screen")}
+              className={type === "screen" && !area ? "active" : ""}
+              onClick={() => {
+                setType("screen");
+                setArea(false);
+              }}
             >
               Screens
             </button>
             <button
               className={type === "window" ? "active" : ""}
-              onClick={() => setType("window")}
+              onClick={() => {
+                setType("window");
+                setArea(false);
+              }}
             >
               Windows
+            </button>
+            <button
+              className={area ? "active" : ""}
+              onClick={() => {
+                setType("screen");
+                setArea(true);
+              }}
+            >
+              Area
             </button>
           </div>
         ) : (
@@ -2190,11 +2189,13 @@ function SourceChooser({
         <button
           className="button primary"
           disabled={loading || !selected || !!error}
-          onClick={() => onChoose(selected)}
+          onClick={() => onChoose(selected, area)}
         >
           {mode === "record" ? <Video size={16} /> : <Scan size={16} />}{" "}
           {mode === "record"
-            ? "Start recording"
+            ? area
+              ? "Select recording area"
+              : "Start recording"
             : mode === "region"
               ? "Select area"
               : "Capture"}

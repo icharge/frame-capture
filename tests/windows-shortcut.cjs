@@ -90,9 +90,7 @@ async function main() {
     let page = await app.firstWindow();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page
-      .getByRole("heading", { name: "Good work. Worth capturing." })
-      .waitFor();
+    await page.getByRole("heading", { name: /^Captures/ }).waitFor();
     let toggle = await preferences(page);
     assert.equal(await toggle.isChecked(), false);
     await setToggle(toggle, true);
@@ -175,7 +173,10 @@ async function main() {
     await overlay.mouse.move(80, 100);
     await overlay.mouse.down();
     await overlay.mouse.move(330, 280, { steps: 8 });
+    const previewPromise = app.waitForEvent("window");
     await overlay.mouse.up();
+    const preview = await previewPromise;
+    await preview.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Image annotation canvas").waitFor();
     const captures = await page.evaluate(() => window.frame.list());
     assert.equal(captures.length, 1);

@@ -1,6 +1,6 @@
 {
   "name": "frame-capture",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "A local-first screenshot and screen recording workspace for macOS and Windows.",
   "author": "Frame",
   "private": true,
@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "npm run build:shortcuts && tsc --noEmit && vite build",
+    "build": "npm run build:shortcuts && node scripts/check-electron.cjs && tsc --noEmit && vite build",
     "start": "electron .",
     "test": "node --experimental-strip-types --test tests/*.test.cjs",
     "test:desktop": "node tests/desktop.cjs",
@@ -26,17 +26,19 @@
     "format": "prettier --write src electron tests scripts docs tokens.css index.html vite.config.ts tsconfig.json package.json README.md .github/workflows/build.yml",
     "pack:win": "npm run build && electron-builder --win --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 --x64",
+    "dist:mac": "npm run build && node scripts/package-mac.cjs",
     "build:shortcuts": "node scripts/build-shortcut-host.cjs",
     "predev": "npm run build:shortcuts",
     "prestart": "npm run build:shortcuts",
     "test:shortcuts": "npm run build:shortcuts && node tests/windows-shortcut.cjs",
     "test:permissions-ui": "node tests/permissions-ui.cjs",
-    "test:editor": "node tests/editor.cjs"
+    "test:editor": "node tests/editor.cjs",
+    "test:workflow": "node tests/workflow.cjs"
   },
   "dependencies": {
     "@fontsource/inter": "5.3.0",
     "@fontsource/space-grotesk": "5.3.0",
+    "ffmpeg-static": "5.3.0",
     "lucide-react": "1.61.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
@@ -64,13 +66,25 @@
       "dist/**/*",
       "electron/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "tokens.css",
+      "!assets/native/ffmpeg/**"
     ],
     "asar": true,
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico",
-      "signExecutable": false
+      "signExecutable": false,
+      "extraResources": [
+        {
+          "from": "node_modules/ffmpeg-static/ffmpeg.exe.LICENSE",
+          "to": "licenses/ffmpeg.LICENSE"
+        },
+        {
+          "from": "node_modules/ffmpeg-static/ffmpeg.exe.README",
+          "to": "licenses/ffmpeg.README"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -91,7 +105,18 @@
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "asarUnpack": [
-      "assets/native/*.exe"
+      "assets/native/*.exe",
+      "node_modules/ffmpeg-static/**"
+    ],
+    "extraResources": [
+      {
+        "from": "docs/THIRD_PARTY_NOTICES.md",
+        "to": "licenses/THIRD_PARTY_NOTICES.md"
+      },
+      {
+        "from": "node_modules/ffmpeg-static/LICENSE",
+        "to": "licenses/ffmpeg-static.LICENSE"
+      }
     ]
   }
 }

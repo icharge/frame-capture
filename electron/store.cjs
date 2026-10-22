@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
+const { validDocument } = require("./projects.cjs");
 const MAX_BYTES = 256 * 1024 * 1024;
 const MIMES = {
   "image/png": ".png",
@@ -44,6 +45,11 @@ class CaptureStore {
   }
   async init() {
     await fs.mkdir(this.root, { recursive: true });
+    await Promise.all(
+      ["screenshots", "recordings", "projects"].map((folder) =>
+        fs.mkdir(path.join(this.root, folder), { recursive: true }),
+      ),
+    );
     try {
       this.items = JSON.parse(
         await fs.readFile(path.join(this.root, "library.json"), "utf8"),
@@ -84,15 +90,37 @@ class CaptureStore {
     if (!item) throw new Error("Capture not found.");
     return item;
   }
-  file(id) {
-    const item = this.get(id);
-    return path.join(this.root, item.id + MIMES[item.mime]);
+  file(id, includeDeleted = false) {
+    const item = this.get(id, includeDeleted);
+    return path.join(
+      this.root,
+      ...(item.organized
+        ? [item.kind === "image" ? "screenshots" : "recordings"]
+        : []),
+      item.id + MIMES[item.mime],
+    );
   }
-  async read(id) {
+  async read(id, includeDeleted = false) {
     return {
-      data: (await fs.readFile(this.file(id))).toString("base64"),
-      mime: this.get(id).mime,
+      data: (await fs.readFile(this.file(id, includeDeleted))).toString(
+        "base64",
+      ),
+      mime: this.get(id, includeDeleted).mime,
     };
+  }
+  async project(id) {
+    const item = this.get(id);
+    if (!item.sourceId) return null;
+    this.get(item.sourceId, true);
+    const document = validDocument(
+      JSON.parse(
+        await fs.readFile(
+          path.join(this.root, "projects", id + ".json"),
+          "utf8",
+        ),
+      ),
+    );
+    return { sourceId: item.sourceId, document };
   }
   async add(input) {
     return this.mutate(async () => {
@@ -110,9 +138,19 @@ class CaptureStore {
         )
       )
         throw new Error("This image file could not be recognized.");
+      let project;
+      if (input.project) {
+        this.get(input.project.sourceId, true);
+        project = {
+          sourceId: input.project.sourceId,
+          document: validDocument(input.project.document),
+        };
+      }
       const id = randomUUID();
       const item = {
         id,
+        organized: true,
+        ...(project ? { sourceId: project.sourceId } : {}),
         name: safeName(input.name),
         kind: input.mime.startsWith("video/") ? "video" : "image",
         mime: input.mime,
@@ -129,15 +167,32 @@ class CaptureStore {
             ? input.thumbnail
             : "",
       };
-      await fs.writeFile(path.join(this.root, id + MIMES[input.mime]), bytes);
+      const mediaPath = path.join(
+        this.root,
+        item.kind === "image" ? "screenshots" : "recordings",
+        id + MIMES[input.mime],
+      );
+      await fs.writeFile(mediaPath, bytes);
+      if (project) {
+        try {
+          await fs.writeFile(
+            path.join(this.root, "projects", id + ".json"),
+            JSON.stringify(project.document),
+          );
+        } catch (error) {
+          await fs.unlink(mediaPath).catch(() => {});
+          throw error;
+        }
+      }
       this.items.push(item);
       try {
         await this.persist();
       } catch (error) {
         this.items.pop();
         await fs
-          .unlink(path.join(this.root, id + MIMES[input.mime]))
+          .unlink(path.join(this.root, "projects", id + ".json"))
           .catch(() => {});
+        await fs.unlink(mediaPath).catch(() => {});
         throw error;
       }
       return item;

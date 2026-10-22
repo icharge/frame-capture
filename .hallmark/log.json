@@ -1,1 +1,18 @@
-[{"date":"2026-10-22","macrostructure":"Workbench","theme":"Cobalt","enrichment":"none — working capture editor","nav":"N3 side navigation adapted for a desktop utility","footer":"Ft2 inline status","brief":"Frame · local screenshot and screen recording app for Windows and macOS"}]
+[
+  {
+    "date": "2026-10-22",
+    "macrostructure": "Compact utility shelf",
+    "theme": "Cobalt (existing system)",
+    "enrichment": "none",
+    "brief": "Minimal main window: capture toolbar, library tabs, and quiet empty state"
+  },
+  {
+    "date": "2026-10-22",
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "enrichment": "none — working capture editor",
+    "nav": "N3 side navigation adapted for a desktop utility",
+    "footer": "Ft2 inline status",
+    "brief": "Frame · local screenshot and screen recording app for Windows and macOS"
+  }
+]

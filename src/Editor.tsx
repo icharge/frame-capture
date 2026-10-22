@@ -34,6 +34,7 @@ import {
   renderImage,
   bounds,
   moveMark,
+  fontFamilies,
   type Tool,
   type Mark,
   type EditorDoc,
@@ -81,8 +82,11 @@ export default function Editor({
   onError: (s: string) => void;
   settings: Settings;
 }) {
+  const baseSource = useRef(capture.id),
+    hadDraft = useRef(!!sessionStorage.getItem(`frame-draft-${capture.id}`));
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [doc, setDoc] = useState<EditorDoc>(() => readDraft(capture.id));
+  const baseline = useRef<EditorDoc>(structuredClone(initialDoc));
   const docRef = useRef(doc);
   docRef.current = doc;
   const [past, setPast] = useState<EditorDoc[]>(() =>
@@ -94,6 +98,11 @@ export default function Editor({
   const [tool, setTool] = useState<Tool>("arrow"),
     [color, setColor] = useState("blue"),
     [size, setSize] = useState(5);
+  const [fontFamily, setFontFamily] = useState("Inter"),
+    [fontSize, setFontSize] = useState(35),
+    [fontStyle, setFontStyle] =
+      useState<NonNullable<Mark["fontStyle"]>>("bold"),
+    [nextNumber, setNextNumber] = useState<number | null>(null);
   const [draft, setDraft] = useState<Mark | null>(null),
     [cropDraft, setCropDraft] = useState<ReturnType<
       typeof normalizedRect
@@ -130,7 +139,59 @@ export default function Editor({
     setFuture((f) => f.slice(1));
     setSelected(null);
   };
-  const dirty = past.length > 0;
+  const selectedMark = doc.marks.find((m) => m.id === selected);
+  const updateMark = (patch: Partial<Mark>) => {
+    if (selected)
+      commit({
+        ...docRef.current,
+        marks: docRef.current.marks.map((m) =>
+          m.id === selected ? { ...m, ...patch } : m,
+        ),
+      });
+  };
+  const changeColor = (value: string) => {
+    setColor(value);
+    updateMark({ color: value });
+  };
+  const changeSize = (value: number) => {
+    setSize(value);
+    updateMark({ size: value });
+  };
+  const currentFont = selectedMark
+      ? selectedMark.fontFamily || "Inter"
+      : fontFamily,
+    currentFontSize =
+      selectedMark?.fontSize ||
+      (selectedMark ? selectedMark.size * 5 + 10 : fontSize),
+    currentFontStyle = selectedMark
+      ? selectedMark.fontStyle || "bold"
+      : fontStyle;
+  function geometry(key: "x" | "y" | "width" | "height", value: number) {
+    if (!selectedMark || !Number.isFinite(value)) return;
+    const b = bounds(selectedMark);
+    if (key === "x" || key === "y") {
+      const moved = moveMark(
+        selectedMark,
+        key === "x" ? value - b.x : 0,
+        key === "y" ? value - b.y : 0,
+      );
+      updateMark(moved);
+      return;
+    }
+    const sx = key === "width" ? Math.max(1, value) / Math.max(1, b.width) : 1,
+      sy = key === "height" ? Math.max(1, value) / Math.max(1, b.height) : 1;
+    updateMark({
+      x: b.x + (selectedMark.x - b.x) * sx,
+      x2: b.x + (selectedMark.x2 - b.x) * sx,
+      y: b.y + (selectedMark.y - b.y) * sy,
+      y2: b.y + (selectedMark.y2 - b.y) * sy,
+      points: selectedMark.points?.map((p) => ({
+        x: b.x + (p.x - b.x) * sx,
+        y: b.y + (p.y - b.y) * sy,
+      })),
+    });
+  }
+  const dirty = JSON.stringify(doc) !== JSON.stringify(baseline.current);
   useEffect(() => {
     try {
       sessionStorage.setItem(`frame-draft-${capture.id}`, JSON.stringify(doc));
@@ -139,8 +200,24 @@ export default function Editor({
   useEffect(() => {
     let active = true;
     api
-      .read(capture.id)
-      .then(async ({ data, mime }) => {
+      .project(capture.id)
+      .then(async (project) => {
+        if (project) {
+          baseSource.current = project.sourceId;
+          baseline.current = project.document;
+          if (active && !hadDraft.current) {
+            setDoc(project.document);
+            setPast([]);
+            setFuture([]);
+          } else if (active)
+            setPast(
+              JSON.stringify(docRef.current) ===
+                JSON.stringify(project.document)
+                ? []
+                : [project.document],
+            );
+        }
+        const { data, mime } = project?.image || (await api.read(capture.id));
         const img = await loadImage(`data:${mime};base64,${data}`);
         if (active) setImage(img);
       })
@@ -297,6 +374,7 @@ export default function Editor({
       size,
       points: tool === "pen" ? [p] : undefined,
       number:
+        nextNumber ??
         doc.marks.reduce(
           (highest, m) =>
             m.type === "step" ? Math.max(highest, m.number || 0) : highest,
@@ -304,6 +382,7 @@ export default function Editor({
         ) + 1,
     };
     if (tool === "step") {
+      setNextNumber(Math.min(99999, (mark.number ?? 0) + 1));
       commit({ ...doc, marks: [...doc.marks, mark] });
       return;
     }
@@ -387,6 +466,7 @@ export default function Editor({
         mime: "image/png",
         bytes: fromDataUrl(data),
         ...details,
+        project: { sourceId: baseSource.current, document: docRef.current },
       });
       sessionStorage.removeItem(`frame-draft-${capture.id}`);
       onSaved(item);
@@ -416,6 +496,7 @@ export default function Editor({
         mime: "image/png",
         bytes: fromDataUrl(data),
         ...(await imageDetails(data)),
+        project: { sourceId: baseSource.current, document: docRef.current },
       });
       temporaryId = item.id;
       if (!(await api.exportFile(item.id, settings.format))) {
@@ -448,18 +529,30 @@ export default function Editor({
           <div>
             <h1>{capture.name}</h1>
             <p>
-              {dirty ? "Unsaved edits · original preserved" : "Original image"}{" "}
+              {dirty
+                ? "Unsaved edits · original preserved"
+                : baseSource.current !== capture.id
+                  ? "Editable copy · original preserved"
+                  : "Original image"}{" "}
               <span>·</span> {capture.width} × {capture.height}
             </p>
           </div>
         </div>
         <div className="editor-actions">
-          <button className="button" onClick={copy} disabled={!image}>
+          <button
+            className="button"
+            aria-label={copied ? "Copied" : "Copy"}
+            title="Copy"
+            onClick={copy}
+            disabled={!image}
+          >
             {copied ? <Check size={16} /> : <Copy size={16} />}
             <span>{copied ? "Copied" : "Copy"}</span>
           </button>
           <button
             className="button"
+            aria-label="Export"
+            title="Export"
             onClick={exportEdited}
             disabled={busy || !image}
           >
@@ -468,6 +561,8 @@ export default function Editor({
           </button>
           <button
             className="button primary"
+            aria-label="Save copy"
+            title="Save copy"
             onClick={save}
             disabled={busy || !image}
           >
@@ -557,7 +652,7 @@ export default function Editor({
               {tool === "crop"
                 ? "Drag over the image to crop"
                 : tool === "select"
-                  ? "Select an annotation to move or delete it"
+                  ? "Select an annotation to edit its properties, move, or delete it"
                   : tool === "redact"
                     ? "Draw an opaque block over sensitive details"
                     : tool === "text"
@@ -606,26 +701,175 @@ export default function Editor({
               {markColors.map((c) => (
                 <button
                   key={c.id}
-                  className={`color-swatch ${color === c.id ? "chosen" : ""}`}
+                  className={`color-swatch ${(selectedMark?.color || color) === c.id ? "chosen" : ""}`}
                   style={{ background: `var(${c.token})` }}
                   title={c.label}
                   aria-label={`${c.label} annotation`}
-                  aria-pressed={color === c.id}
-                  onClick={() => setColor(c.id)}
+                  aria-pressed={(selectedMark?.color || color) === c.id}
+                  onClick={() => changeColor(c.id)}
                 />
               ))}
             </div>
             <label className="slider-label" htmlFor="stroke-size">
-              Stroke size <span>{size} px</span>
+              Stroke size <span>{selectedMark?.size || size} px</span>
             </label>
             <input
               id="stroke-size"
               type="range"
               min="2"
               max="16"
-              value={size}
-              onChange={(e) => setSize(+e.target.value)}
+              value={selectedMark?.size || size}
+              onChange={(e) => changeSize(+e.target.value)}
             />
+            <label className="property-field">
+              Custom color
+              <input
+                type="color"
+                aria-label="Custom annotation color"
+                value={
+                  /^#[0-9a-f]{6}$/i.test(selectedMark?.color || color)
+                    ? selectedMark?.color || color
+                    : "#2457eb"
+                }
+                onChange={(e) => changeColor(e.target.value)}
+              />
+            </label>
+            {(tool === "step" || selectedMark?.type === "step") && (
+              <div className="annotation-properties">
+                <label className="property-field">
+                  Next number
+                  <input
+                    aria-label="Next number"
+                    type="number"
+                    min="0"
+                    max="99999"
+                    value={
+                      nextNumber ??
+                      doc.marks.reduce(
+                        (n, m) =>
+                          m.type === "step" ? Math.max(n, m.number ?? 0) : n,
+                        0,
+                      ) + 1
+                    }
+                    onChange={(e) =>
+                      setNextNumber(
+                        Math.max(
+                          0,
+                          Math.min(99999, Math.floor(+e.target.value)),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                {selectedMark?.type === "step" && (
+                  <label className="property-field">
+                    Step number
+                    <input
+                      aria-label="Step number"
+                      type="number"
+                      min="0"
+                      max="99999"
+                      value={selectedMark.number ?? 1}
+                      onChange={(e) =>
+                        updateMark({
+                          number: Math.max(
+                            0,
+                            Math.min(99999, Math.floor(+e.target.value)),
+                          ),
+                        })
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            {(tool === "text" || selectedMark?.type === "text") && (
+              <div className="annotation-properties">
+                {selectedMark?.type === "text" && (
+                  <label className="property-field">
+                    Text content
+                    <textarea
+                      aria-label="Text content"
+                      maxLength={240}
+                      value={selectedMark.text || ""}
+                      onChange={(e) => updateMark({ text: e.target.value })}
+                    />
+                  </label>
+                )}
+                <label className="property-field">
+                  Font family
+                  <select
+                    aria-label="Font family"
+                    value={currentFont}
+                    onChange={(e) => {
+                      setFontFamily(e.target.value);
+                      updateMark({ fontFamily: e.target.value });
+                    }}
+                  >
+                    {fontFamilies.map((f) => (
+                      <option key={f}>{f}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="property-field">
+                  Font style
+                  <select
+                    aria-label="Font style"
+                    value={currentFontStyle}
+                    onChange={(e) => {
+                      const value = e.target.value as NonNullable<
+                        Mark["fontStyle"]
+                      >;
+                      setFontStyle(value);
+                      updateMark({ fontStyle: value });
+                    }}
+                  >
+                    <option value="regular">Regular</option>
+                    <option value="bold">Bold</option>
+                    <option value="italic">Italic</option>
+                    <option value="bold-italic">Bold italic</option>
+                  </select>
+                </label>
+                <label className="property-field">
+                  Font size
+                  <input
+                    aria-label="Font size"
+                    type="number"
+                    min="8"
+                    max="500"
+                    value={currentFontSize}
+                    onChange={(e) => {
+                      const value = Math.max(8, Math.min(500, +e.target.value));
+                      setFontSize(value);
+                      updateMark({ fontSize: value });
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+            {selectedMark && (
+              <div className="annotation-properties">
+                <h3>Position & size</h3>
+                {(["x", "y", "width", "height"] as const)
+                  .filter(
+                    (k) =>
+                      !["step", "text"].includes(selectedMark.type) ||
+                      k === "x" ||
+                      k === "y",
+                  )
+                  .map((key) => (
+                    <label className="property-field" key={key}>
+                      {key.toUpperCase()}
+                      <input
+                        aria-label={`Annotation ${key}`}
+                        type="number"
+                        value={Math.round(bounds(selectedMark)[key])}
+                        onChange={(e) => geometry(key, +e.target.value)}
+                      />
+                    </label>
+                  ))}
+              </div>
+            )}
             {selected && (
               <button
                 className="button danger full"
@@ -758,6 +1002,9 @@ export default function Editor({
                   color,
                   size,
                   text: text.trim(),
+                  fontFamily,
+                  fontSize,
+                  fontStyle,
                 };
                 commit({ ...doc, marks: [...doc.marks, mark] });
                 setTextPoint(null);
