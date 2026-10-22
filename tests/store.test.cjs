@@ -114,3 +114,27 @@ test("region bounds clamp at display edges and reject empty / invalid crops", ()
     /Invalid capture/,
   );
 });
+
+test("MP4 and WebM captures preserve their native extensions, bytes, and duration after restart", async (t) => {
+  const { store, root } = await setup(t);
+  for (const format of ["mp4", "webm"]) {
+    const bytes = Buffer.from("encoded " + format + " fixture");
+    const capture = await store.add({
+      ...input(),
+      mime: "video/" + format,
+      bytes,
+      width: 1920,
+      height: 1080,
+      duration: 6.25,
+    });
+    assert.equal(path.extname(store.file(capture.id)), "." + format);
+    const reopened = new CaptureStore(root);
+    await reopened.init();
+    assert.equal(reopened.get(capture.id).duration, 6.25);
+    assert.equal(reopened.get(capture.id).kind, "video");
+    assert.equal(
+      (await reopened.read(capture.id)).data,
+      bytes.toString("base64"),
+    );
+  }
+});

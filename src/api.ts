@@ -67,11 +67,16 @@ function download(data: string, name: string) {
   a.click();
 }
 const browserAPI: FrameAPI = {
+  setSnippingShortcut: async () => {
+    throw new Error("Win+Shift+S is available in the Windows desktop app.");
+  },
+  requestPermission: async () => ({ screen: "prompt", microphone: "prompt" }),
   info: async () => ({
     platform: "browser",
     version: __APP_VERSION__,
     storagePath: "This browser · IndexedDB",
     screenPermission: "prompt",
+    microphonePermission: "prompt",
     shortcuts: {},
   }),
   list: async () =>
@@ -134,7 +139,16 @@ const browserAPI: FrameAPI = {
         0.95,
       );
     }
-    download(data, item.name + "." + (item.kind === "video" ? "webm" : format));
+    download(
+      data,
+      item.name +
+        "." +
+        (item.kind === "video"
+          ? item.mime === "video/mp4"
+            ? "mp4"
+            : "webm"
+          : format),
+    );
     return true;
   },
   copyImage: async (data) => {

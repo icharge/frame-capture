@@ -17,6 +17,18 @@ const {
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { CaptureStore, clampRect } = require("./store.cjs");
+const { WindowsShortcut } = require("./windows-shortcut.cjs");
+const {
+  createPermissions,
+  permissionRequestAllowed,
+  permissionCheckAllowed,
+} = require("./permissions.cjs");
+const permissions = createPermissions({
+  platform: process.platform,
+  systemPreferences,
+  desktopCapturer,
+  shell,
+});
 
 const isDev = process.argv.includes("--dev");
 if (process.env.FRAME_DATA_DIR)
@@ -29,6 +41,7 @@ let mainWindow,
   recording = false,
   capturing = false;
 let shortcuts = {};
+let windowsShortcut;
 const trusted = (event) =>
   mainWindow &&
   event.sender === mainWindow.webContents &&
@@ -67,7 +80,7 @@ async function sources(type = "screen", full = false) {
         ...displays.map((d) => Math.ceil(d.size.height * d.scaleFactor)),
       )
     : 300;
-  return desktopCapturer.getSources({
+  return permissions.listSources({
     types: [type],
     thumbnailSize: { width, height },
     fetchWindowIcons: false,
@@ -83,9 +96,17 @@ async function capture({ mode, sourceId }) {
   try {
     mainWindow.hide();
     await pause(280);
-    const found = (
-      await sources(mode === "window" ? "window" : "screen", true)
-    ).find((s) => s.id === sourceId);
+    const available = await sources(
+      mode === "window" ? "window" : "screen",
+      true,
+    );
+    const cursorDisplay =
+      mode === "region" && sourceId === "cursor"
+        ? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+        : null;
+    const found = cursorDisplay
+      ? available.find((s) => s.display_id === String(cursorDisplay.id))
+      : available.find((s) => s.id === sourceId);
     if (!found || found.thumbnail.isEmpty())
       throw new Error(
         "That source is unavailable. On macOS, allow Screen Recording in System Settings, then restart Frame.",
@@ -196,18 +217,41 @@ if (ownsProfile)
     .then(async () => {
       store = new CaptureStore(path.join(app.getPath("userData"), "captures"));
       await store.init();
+      if (process.platform === "win32") {
+        windowsShortcut = new WindowsShortcut({
+          executable: app.isPackaged
+            ? path.join(
+                process.resourcesPath,
+                "app.asar.unpacked/assets/native/FrameShortcutHost.exe",
+              )
+            : path.join(__dirname, "../assets/native/FrameShortcutHost.exe"),
+          preferenceFile: path.join(
+            app.getPath("userData"),
+            "windows-shortcut.json",
+          ),
+          defaultEnabled: !process.env.FRAME_TEST,
+          onCapture: () => {
+            if (!capturing) command("snip");
+          },
+          onChange: () => {
+            if (mainWindow && !mainWindow.isDestroyed())
+              mainWindow.webContents.send("app:command", "shortcuts-changed");
+          },
+        });
+        await windowsShortcut.init();
+      }
       createWindow();
-      const allowed = ["media", "display-capture"];
       session.defaultSession.setPermissionRequestHandler(
-        (contents, permission, callback) =>
+        (contents, permission, callback, details) =>
           callback(
             contents === mainWindow?.webContents &&
-              allowed.includes(permission),
+              permissionRequestAllowed(permission, details),
           ),
       );
       session.defaultSession.setPermissionCheckHandler(
-        (contents, permission) =>
-          contents === mainWindow?.webContents && allowed.includes(permission),
+        (contents, permission, _origin, details) =>
+          contents === mainWindow?.webContents &&
+          permissionCheckAllowed(permission, details),
       );
       session.defaultSession.setDisplayMediaRequestHandler(
         async (request, callback) => {
@@ -220,7 +264,7 @@ if (ownsProfile)
             const selected = selectedRecordingSource;
             selectedRecordingSource = null;
             const source = (
-              await desktopCapturer.getSources({
+              await permissions.listSources({
                 types: ["screen", "window"],
                 thumbnailSize: { width: 0, height: 0 },
               })
@@ -244,11 +288,18 @@ if (ownsProfile)
         version: app.getVersion(),
         storagePath: store.root,
         shortcuts,
-        screenPermission:
-          process.platform === "darwin"
-            ? systemPreferences.getMediaAccessStatus("screen")
-            : "granted",
+        snippingShortcut: windowsShortcut
+          ? { ...windowsShortcut.status }
+          : undefined,
+        screenPermission: permissions.status().screen,
+        microphonePermission: permissions.status().microphone,
       }));
+      handle("app:snipping-shortcut", (enabled) => {
+        if (!windowsShortcut)
+          throw new Error("This shortcut is available only on Windows.");
+        return windowsShortcut.setEnabled(enabled);
+      });
+      handle("app:request-permission", (kind) => permissions.request(kind));
       handle("capture:list", () => store.list());
       handle("capture:read", (id) => store.read(id));
       handle("capture:save", (input) => store.add(input));
@@ -283,7 +334,11 @@ if (ownsProfile)
         const item = store.get(id);
         const image = item.kind === "image";
         if (image && !["png", "jpg"].includes(format)) format = "png";
-        const extension = image ? format : "webm";
+        const extension = image
+          ? format
+          : item.mime === "video/mp4"
+            ? "mp4"
+            : "webm";
         const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
           title: "Export capture",
           defaultPath: path.join(
@@ -291,7 +346,14 @@ if (ownsProfile)
             item.name + "." + extension,
           ),
           filters: [
-            { name: image ? "Image" : "WebM video", extensions: [extension] },
+            {
+              name: image
+                ? "Image"
+                : extension === "mp4"
+                  ? "MP4 video"
+                  : "WebM video",
+              extensions: [extension],
+            },
           ],
         });
         if (canceled || !filePath) return false;
@@ -321,13 +383,7 @@ if (ownsProfile)
       });
       handle("capture:reveal", (id) => shell.showItemInFolder(store.file(id)));
       handle("app:folder", () => shell.openPath(store.root));
-      handle("app:permissions", () =>
-        process.platform === "darwin"
-          ? shell.openExternal(
-              "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-            )
-          : false,
-      );
+      handle("app:permissions", (kind) => permissions.open(kind));
       ipcMain.handle("region:image", (event) =>
         event.sender === overlay?.webContents ? regionData : null,
       );
@@ -337,7 +393,7 @@ if (ownsProfile)
           () => command("region"),
         );
         shortcuts.screen = globalShortcut.register(
-          "CommandOrControl+Shift+3",
+          process.platform === "darwin" ? "Command+Shift+1" : "Control+Shift+3",
           () => command("screen"),
         );
         shortcuts.record = globalShortcut.register(
@@ -410,7 +466,10 @@ if (ownsProfile)
       dialog.showErrorBox("Frame could not start", error.message);
       app.quit();
     });
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => {
+  windowsShortcut?.dispose();
+  globalShortcut.unregisterAll();
+});
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });

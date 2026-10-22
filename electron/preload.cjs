@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("frame", {
   info: () => ipcRenderer.invoke("app:info"),
+  setSnippingShortcut: (enabled) =>
+    ipcRenderer.invoke("app:snipping-shortcut", enabled),
   list: () => ipcRenderer.invoke("capture:list"),
   read: (id) => ipcRenderer.invoke("capture:read", id),
   save: (input) => ipcRenderer.invoke("capture:save", input),
@@ -15,7 +17,9 @@ contextBridge.exposeInMainWorld("frame", {
   copyImage: (data) => ipcRenderer.invoke("capture:copy", data),
   reveal: (id) => ipcRenderer.invoke("capture:reveal", id),
   openFolder: () => ipcRenderer.invoke("app:folder"),
-  openPermissions: () => ipcRenderer.invoke("app:permissions"),
+  openPermissions: (kind) => ipcRenderer.invoke("app:permissions", kind),
+  requestPermission: (kind) =>
+    ipcRenderer.invoke("app:request-permission", kind),
   onCommand: (callback) => {
     const listener = (_, command) => callback(command);
     ipcRenderer.on("app:command", listener);

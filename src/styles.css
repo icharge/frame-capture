@@ -1128,7 +1128,7 @@ img {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  max-height: 400px;
+  max-height: min(400px, 36dvh);
   overflow: auto;
   padding: 3px;
 }
@@ -1160,7 +1160,8 @@ img {
   color: var(--color-muted);
 }
 .source-card strong {
-  overflow: clip;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
@@ -1189,9 +1190,16 @@ img {
   margin: 0 0 0 4px;
 }
 .record-options select {
+  max-width: 180px;
   font-size: 11px;
   height: 29px;
   padding: 0 6px;
+}
+.recording-hint {
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--color-muted);
+  margin-top: var(--space-sm);
 }
 .video-player {
   width: 100%;

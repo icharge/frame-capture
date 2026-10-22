@@ -49,7 +49,23 @@ import {
   durationLabel,
 } from "./api";
 import { makeDemo } from "./demo";
-import type { AppInfo, Capture, Settings, Source } from "./types";
+import {
+  FRAME_RATES,
+  RECORDING_PRESETS,
+  RecordingClock,
+  finalizeRecording,
+  recorderCandidates,
+  recordingFrameRate,
+  recordingMime,
+  recordingPreset,
+} from "./recording";
+import type {
+  AppInfo,
+  Capture,
+  Settings,
+  Source,
+  PermissionKind,
+} from "./types";
 import Editor from "./Editor";
 import { Modal, Spinner } from "./components";
 
@@ -60,13 +76,24 @@ const defaultSettings: Settings = {
   systemAudio: false,
   countdown: 3,
   format: "png",
-  fps: 30,
+  fps: 15,
+  recordingQuality: "compact",
+  recordingFormat: "mp4",
 };
 function readSettings(): Settings {
   try {
+    const saved = JSON.parse(localStorage.getItem("frame-settings") || "{}");
     return {
       ...defaultSettings,
-      ...JSON.parse(localStorage.getItem("frame-settings") || "{}"),
+      ...saved,
+      // Apply the new compact default once to preferences from the old fixed-bitrate recorder.
+      fps: saved.recordingQuality ? recordingFrameRate(saved.fps) : 15,
+      recordingQuality: ["compact", "balanced", "high"].includes(
+        saved.recordingQuality,
+      )
+        ? saved.recordingQuality
+        : "compact",
+      recordingFormat: saved.recordingFormat === "webm" ? "webm" : "mp4",
     };
   } catch {
     return defaultSettings;
@@ -110,8 +137,12 @@ export default function App() {
     audioContext = useRef<AudioContext | null>(null);
   const fileInput = useRef<HTMLInputElement>(null),
     commandsRef = useRef<(command: string) => void>(() => {}),
-    recordSeconds = useRef(0),
+    recordingClock = useRef(new RecordingClock()),
     importing = useRef(false);
+  const [shortcutBusy, setShortcutBusy] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState<PermissionKind | null>(
+    null,
+  );
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -150,9 +181,8 @@ export default function App() {
   useEffect(() => {
     if (recordState !== "recording") return;
     const id = setInterval(() => {
-      recordSeconds.current++;
-      setSeconds(recordSeconds.current);
-    }, 1000);
+      setSeconds(Math.floor(recordingClock.current.elapsed() / 1000));
+    }, 200);
     return () => clearInterval(id);
   }, [recordState]);
   useEffect(
@@ -253,6 +283,58 @@ export default function App() {
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
   });
+  async function requestPermission(kind: PermissionKind) {
+    setPermissionBusy(kind);
+    try {
+      const status = await api.requestPermission(kind);
+      setInfo((current) =>
+        current
+          ? {
+              ...current,
+              screenPermission: status.screen,
+              microphonePermission: status.microphone,
+            }
+          : current,
+      );
+      if (status[kind] !== "granted")
+        notify(
+          kind === "screen"
+            ? "Allow Frame under Screen Recording in System Settings, then restart Frame."
+            : "Allow Frame under Microphone in System Settings, then restart Frame.",
+        );
+    } catch (e) {
+      error((e as Error).message);
+    } finally {
+      setPermissionBusy(null);
+    }
+  }
+  async function toggleSnippingShortcut(enabled: boolean) {
+    setShortcutBusy(true);
+    const previous = info?.snippingShortcut;
+    setInfo((current) =>
+      current
+        ? {
+            ...current,
+            snippingShortcut: { enabled, active: false, error: "" },
+          }
+        : current,
+    );
+    try {
+      const status = await api.setSnippingShortcut(enabled);
+      setInfo((current) =>
+        current ? { ...current, snippingShortcut: status } : current,
+      );
+      if (status.error) error(status.error);
+    } catch (e) {
+      if (previous)
+        setInfo((current) =>
+          current ? { ...current, snippingShortcut: previous } : current,
+        );
+      error((e as Error).message);
+    } finally {
+      setShortcutBusy(false);
+    }
+  }
   async function screenshot(
     mode: Exclude<CaptureMode, "record">,
     sourceId = "",
@@ -309,6 +391,7 @@ export default function App() {
   }
   function stopRecording() {
     if (recorder.current && recorder.current.state !== "inactive") {
+      recordingClock.current.stop();
       setRecordState("saving");
       recorder.current.stop();
     }
@@ -327,12 +410,36 @@ export default function App() {
     setBusy(true);
     let stream: MediaStream | null = null;
     try {
-      if (desktop) await api.recordingSource(sourceId, settings.systemAudio);
+      if (desktop && info?.platform === "darwin" && settings.microphone) {
+        const permission = await api.requestPermission("microphone");
+        setInfo((current) =>
+          current
+            ? { ...current, microphonePermission: permission.microphone }
+            : current,
+        );
+        if (permission.microphone !== "granted")
+          throw new Error(
+            "Microphone access is required for narration. Allow Frame in System Settings → Privacy & Security → Microphone, then restart Frame or turn narration off.",
+          );
+      }
+      if (desktop)
+        await api.recordingSource(
+          sourceId,
+          settings.systemAudio && info?.platform !== "darwin",
+        );
       stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: settings.fps },
-        audio: settings.systemAudio,
+        video: {
+          frameRate: {
+            ideal: recordingFrameRate(settings.fps),
+            max: recordingFrameRate(settings.fps),
+          },
+        },
+        audio: settings.systemAudio && info?.platform !== "darwin",
       });
       recordStream.current = stream;
+      stream.getVideoTracks().forEach((track) => {
+        track.contentHint = "detail";
+      });
       if (settings.microphone) {
         microphone.current = await navigator.mediaDevices.getUserMedia({
           audio: true,
@@ -380,17 +487,28 @@ export default function App() {
           throw new Error("Screen sharing ended before recording started.");
       }
       setCountdown(null);
-      const mime = [
-        "video/webm;codecs=vp9,opus",
-        "video/webm;codecs=vp8,opus",
-        "video/webm",
-      ].find((m) => MediaRecorder.isTypeSupported(m));
-      if (!mime)
-        throw new Error("WebM recording is unavailable on this device.");
-      const mr = new MediaRecorder(stream, {
-        mimeType: mime,
-        videoBitsPerSecond: 6000000,
-      });
+      let selectedRecorder: MediaRecorder | null = null;
+      for (const options of recorderCandidates(
+        {
+          ...settings,
+          systemAudio: settings.systemAudio && info?.platform !== "darwin",
+        },
+        width,
+        height,
+        stream.getAudioTracks().length > 0,
+      )) {
+        try {
+          selectedRecorder = new MediaRecorder(stream, options);
+          break;
+        } catch {
+          /* Try the next supported codec. */
+        }
+      }
+      if (!selectedRecorder)
+        throw new Error(
+          "Screen recording is unavailable on this device. Try another format.",
+        );
+      const mr = selectedRecorder;
       recorder.current = mr;
       const chunks: Blob[] = [];
       let bytes = 0;
@@ -415,16 +533,16 @@ export default function App() {
         setRecordState("saving");
         setBusy(true);
         try {
-          const blob = new Blob(chunks, { type: "video/webm" });
-          if (!blob.size)
-            throw new Error("The recording was empty. Try recording again.");
+          const durationMs = recordingClock.current.stop();
+          const mime = recordingMime(mr.mimeType || chunks[0]?.type || "");
+          const blob = await finalizeRecording(chunks, mime, durationMs);
           const capture = await api.save({
             name: `Recording · ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
-            mime: "video/webm",
+            mime,
             bytes: new Uint8Array(await blob.arrayBuffer()),
             width,
             height,
-            duration: recordSeconds.current,
+            duration: durationMs / 1000,
             thumbnail,
           });
           await refresh();
@@ -439,7 +557,7 @@ export default function App() {
         }
       };
       stream.getVideoTracks()[0].onended = stopRecording;
-      recordSeconds.current = 0;
+      recordingClock.current.start();
       setSeconds(0);
       mr.start(1000);
       setRecordState("recording");
@@ -458,14 +576,35 @@ export default function App() {
     if (!mr) return;
     if (mr.state === "recording") {
       mr.pause();
+      recordingClock.current.pause();
+      setSeconds(Math.floor(recordingClock.current.elapsed() / 1000));
       setRecordState("paused");
     } else if (mr.state === "paused") {
       mr.resume();
+      recordingClock.current.resume();
       setRecordState("recording");
     }
   }
   commandsRef.current = (command) => {
-    if (command === "stop-recording") stopRecording();
+    if (command === "shortcuts-changed")
+      void api
+        .info()
+        .then(setInfo)
+        .catch((e) => error(e.message));
+    else if (command === "snip") {
+      if (recordState !== "idle" || busy || countdown !== null) {
+        notify("Finish the current capture or recording first.");
+        return;
+      }
+      setHelp(false);
+      setPalette(false);
+      setRename(null);
+      if (video) {
+        URL.revokeObjectURL(video.url);
+        setVideo(null);
+      }
+      void screenshot("region", "cursor");
+    } else if (command === "stop-recording") stopRecording();
     else if (command === "import") fileInput.current?.click();
     else if (["region", "screen", "window", "record"].includes(command))
       action(command as CaptureMode);
@@ -515,7 +654,11 @@ export default function App() {
       if (
         await api.exportFile(
           c.id,
-          c.kind === "video" ? "webm" : settings.format,
+          c.kind === "video"
+            ? c.mime === "video/mp4"
+              ? "mp4"
+              : "webm"
+            : settings.format,
         )
       )
         notify("Capture exported to your chosen file.");
@@ -547,7 +690,7 @@ export default function App() {
     { name: "Capture an area", hint: "⌘/Ctrl ⇧ 2", fn: () => action("region") },
     {
       name: "Capture full screen",
-      hint: "⌘/Ctrl ⇧ 3",
+      hint: info?.platform === "darwin" ? "⌘ ⇧ 1" : "Ctrl ⇧ 3",
       fn: () => action("screen"),
     },
     { name: "Capture a window", hint: "", fn: () => action("window") },
@@ -798,8 +941,53 @@ export default function App() {
                     </select>
                   </Setting>
                   <Setting
+                    title="Recording quality"
+                    description={
+                      recordingPreset(settings.recordingQuality).description
+                    }
+                  >
+                    <select
+                      aria-label="Recording quality"
+                      value={settings.recordingQuality}
+                      onChange={(e) => {
+                        const quality = e.target
+                          .value as Settings["recordingQuality"];
+                        setSettings({
+                          ...settings,
+                          recordingQuality: quality,
+                          fps: RECORDING_PRESETS[quality].fps,
+                        });
+                      }}
+                    >
+                      {Object.entries(RECORDING_PRESETS).map(([id, preset]) => (
+                        <option key={id} value={id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Setting>
+                  <Setting
+                    title="Video format"
+                    description="MP4 works in most players. WebM offers VP9 compression."
+                  >
+                    <select
+                      aria-label="Video format"
+                      value={settings.recordingFormat}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          recordingFormat: e.target
+                            .value as Settings["recordingFormat"],
+                        })
+                      }
+                    >
+                      <option value="mp4">MP4 · H.264</option>
+                      <option value="webm">WebM · VP9</option>
+                    </select>
+                  </Setting>
+                  <Setting
                     title="Frame rate"
-                    description="Higher frame rates create larger recordings."
+                    description="15 fps suits tutorials and app work. Native resolution is preserved."
                   >
                     <select
                       aria-label="Frame rate"
@@ -808,9 +996,11 @@ export default function App() {
                         setSettings({ ...settings, fps: +e.target.value })
                       }
                     >
-                      <option value="24">24 fps</option>
-                      <option value="30">30 fps</option>
-                      <option value="60">60 fps</option>
+                      {FRAME_RATES.map((fps) => (
+                        <option key={fps} value={fps}>
+                          {fps} fps
+                        </option>
+                      ))}
                     </select>
                   </Setting>
                 </div>
@@ -859,8 +1049,101 @@ export default function App() {
                     <ShieldCheck size={22} className="muted" />
                   </Setting>
                 </div>
+                {info?.platform === "darwin" && (
+                  <div className="settings-section">
+                    <h2>macOS permissions</h2>
+                    <p className="settings-note">
+                      Frame asks when you choose a capture or enable narration
+                      for a recording. No camera, Accessibility, or Input
+                      Monitoring access is needed.
+                    </p>
+                    {(["screen", "microphone"] as const).map((kind) => {
+                      const status =
+                        kind === "screen"
+                          ? info.screenPermission
+                          : info.microphonePermission;
+                      return (
+                        <Setting
+                          key={kind}
+                          title={
+                            kind === "screen"
+                              ? "Screen Recording"
+                              : "Microphone"
+                          }
+                          description={
+                            `Access: ${status}. ` +
+                            (kind === "screen"
+                              ? "Needed to capture other apps and displays."
+                              : "Needed only for narration.")
+                          }
+                        >
+                          <button
+                            className="button"
+                            disabled={permissionBusy !== null}
+                            onClick={() =>
+                              status === "not-determined"
+                                ? void requestPermission(kind)
+                                : void api
+                                    .openPermissions(kind)
+                                    .catch((e) => error(e.message))
+                            }
+                          >
+                            {permissionBusy === kind
+                              ? "Requesting…"
+                              : status === "not-determined"
+                                ? "Request access"
+                                : "Open settings"}
+                          </button>
+                        </Setting>
+                      );
+                    })}
+                    <p className="settings-note">
+                      After changing access in System Settings, restart Frame if
+                      capture is still blocked.
+                    </p>
+                    <button
+                      className="button"
+                      onClick={() =>
+                        void api
+                          .info()
+                          .then(setInfo)
+                          .catch((e) => error(e.message))
+                      }
+                    >
+                      Check permissions
+                    </button>
+                  </div>
+                )}
                 <div className="settings-section">
                   <h2>Keyboard shortcuts</h2>
+                  {info?.platform === "win32" && (
+                    <>
+                      <Setting
+                        title="Use Win+Shift+S for Frame"
+                        description="Capture an area on the screen under your pointer. Overrides Windows Snipping Tool while Frame is running."
+                      >
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          className="toggle"
+                          aria-label="Use Win+Shift+S for Frame"
+                          checked={info.snippingShortcut?.enabled || false}
+                          disabled={shortcutBusy}
+                          onChange={(e) =>
+                            void toggleSnippingShortcut(e.target.checked)
+                          }
+                        />
+                      </Setting>
+                      <p className="settings-note" role="status">
+                        {(shortcutBusy
+                          ? "Updating shortcut…"
+                          : info.snippingShortcut?.error) ||
+                          (info.snippingShortcut?.active
+                            ? "Win+Shift+S is active. Turning this off or quitting Frame restores Windows Snipping Tool."
+                            : "Windows Snipping Tool keeps Win+Shift+S.")}
+                      </p>
+                    </>
+                  )}
                   <div className="shortcut-setting">
                     <span>Capture area</span>
                     <kbd>
@@ -870,7 +1153,9 @@ export default function App() {
                   <div className="shortcut-setting">
                     <span>Capture screen</span>
                     <kbd>
-                      {info?.platform === "darwin" ? "⌘" : "Ctrl"} + Shift + 3
+                      {info?.platform === "darwin"
+                        ? "⌘ + Shift + 1"
+                        : "Ctrl + Shift + 3"}
                     </kbd>
                   </div>
                   <div className="shortcut-setting">
@@ -1284,7 +1569,8 @@ export default function App() {
           <video className="video-player" controls autoPlay src={video.url} />
           <div className="video-meta">
             <span>
-              {video.capture.width} × {video.capture.height} · WebM ·{" "}
+              {video.capture.width} × {video.capture.height} ·{" "}
+              {video.capture.mime === "video/mp4" ? "MP4" : "WebM"} ·{" "}
               {formatBytes(video.capture.bytes)}
             </span>
             <button
@@ -1304,8 +1590,16 @@ export default function App() {
           </p>
           <div className="help-shortcuts">
             {[
+              ...(info?.platform === "win32" && info.snippingShortcut?.active
+                ? [["Capture area under pointer", "Win + Shift + S"]]
+                : []),
               ["Capture area", "Ctrl / ⌘ + Shift + 2"],
-              ["Capture full screen", "Ctrl / ⌘ + Shift + 3"],
+              [
+                "Capture full screen",
+                info?.platform === "darwin"
+                  ? "⌘ + Shift + 1"
+                  : "Ctrl + Shift + 3",
+              ],
               ["Start / stop recording", "Ctrl / ⌘ + Shift + 9"],
               ["Quick actions", "Ctrl / ⌘ + K"],
               ["Import image", "Ctrl / ⌘ + O"],
@@ -1785,6 +2079,60 @@ function SourceChooser({
       {mode === "record" && (
         <div className="record-options">
           <label>
+            <span>Quality</span>
+            <select
+              aria-label="Recording quality"
+              value={settings.recordingQuality}
+              onChange={(e) => {
+                const quality = e.target.value as Settings["recordingQuality"];
+                setSettings({
+                  ...settings,
+                  recordingQuality: quality,
+                  fps: RECORDING_PRESETS[quality].fps,
+                });
+              }}
+            >
+              {Object.entries(RECORDING_PRESETS).map(([id, preset]) => (
+                <option key={id} value={id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Format</span>
+            <select
+              aria-label="Video format"
+              value={settings.recordingFormat}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  recordingFormat: e.target
+                    .value as Settings["recordingFormat"],
+                })
+              }
+            >
+              <option value="mp4">MP4 · H.264</option>
+              <option value="webm">WebM · VP9</option>
+            </select>
+          </label>
+          <label>
+            <span>Frame rate</span>
+            <select
+              aria-label="Recording frame rate"
+              value={settings.fps}
+              onChange={(e) =>
+                setSettings({ ...settings, fps: +e.target.value })
+              }
+            >
+              {FRAME_RATES.map((fps) => (
+                <option key={fps} value={fps}>
+                  {fps} fps
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <Mic size={16} />
             <span>Microphone</span>
             <input
@@ -1828,6 +2176,12 @@ function SourceChooser({
             </select>
           </label>
         </div>
+      )}
+      {mode === "record" && (
+        <p className="recording-hint">
+          {settings.fps} fps · Original resolution ·{" "}
+          {recordingPreset(settings.recordingQuality).description}
+        </p>
       )}
       <div className="modal-actions">
         <button className="button" onClick={onClose}>

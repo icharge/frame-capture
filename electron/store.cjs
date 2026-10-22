@@ -8,6 +8,7 @@ const MIMES = {
   "image/jpeg": ".jpg",
   "image/webp": ".webp",
   "video/webm": ".webm",
+  "video/mp4": ".mp4",
 };
 function safeName(value) {
   return (
@@ -96,7 +97,7 @@ class CaptureStore {
   async add(input) {
     return this.mutate(async () => {
       if (!input || !MIMES[input.mime])
-        throw new Error("Use a PNG, JPEG, WebP, or WebM file.");
+        throw new Error("Use a PNG, JPEG, WebP, MP4, or WebM file.");
       const bytes = Buffer.from(input.bytes || []);
       if (!bytes.length || bytes.length > MAX_BYTES)
         throw new Error("Captures must be between 1 byte and 256 MB.");

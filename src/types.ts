@@ -1,3 +1,5 @@
+import type { RecordingFormat, RecordingQuality } from "./recording";
+
 export type Capture = {
   id: string;
   name: string;
@@ -26,15 +28,25 @@ export type CaptureInput = {
   thumbnail: string;
   duration?: number;
 };
+export type SnippingShortcut = {
+  enabled: boolean;
+  active: boolean;
+  error: string;
+};
+export type PermissionKind = "screen" | "microphone";
+export type PermissionStatus = { screen: string; microphone: string };
 export type AppInfo = {
   platform: string;
   version: string;
   storagePath: string;
   screenPermission: string;
+  microphonePermission: string;
   shortcuts: Record<string, boolean>;
+  snippingShortcut?: SnippingShortcut;
 };
 export type FrameAPI = {
   info(): Promise<AppInfo>;
+  setSnippingShortcut(enabled: boolean): Promise<SnippingShortcut>;
   list(): Promise<Capture[]>;
   read(id: string): Promise<{ data: string; mime: string }>;
   save(input: CaptureInput): Promise<Capture>;
@@ -49,11 +61,15 @@ export type FrameAPI = {
   }): Promise<{ data: string; width: number; height: number } | null>;
   recordingSource(id: string, audio: boolean): Promise<void>;
   recordingState(state: boolean): Promise<void>;
-  exportFile(id: string, format: "png" | "jpg" | "webm"): Promise<boolean>;
+  exportFile(
+    id: string,
+    format: "png" | "jpg" | "webm" | "mp4",
+  ): Promise<boolean>;
   copyImage(data: string): Promise<boolean>;
   reveal(id: string): Promise<void>;
   openFolder(): Promise<unknown>;
-  openPermissions(): Promise<unknown>;
+  openPermissions(kind?: PermissionKind): Promise<unknown>;
+  requestPermission(kind: PermissionKind): Promise<PermissionStatus>;
   onCommand(callback: (command: string) => void): () => void;
 };
 declare global {
@@ -67,4 +83,6 @@ export type Settings = {
   countdown: number;
   format: "png" | "jpg";
   fps: number;
+  recordingQuality: RecordingQuality;
+  recordingFormat: RecordingFormat;
 };

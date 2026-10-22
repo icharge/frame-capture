@@ -5,3 +5,4 @@ test-results/
 .frame-test-data/
 *.log
 *.tsbuildinfo
+assets/native/

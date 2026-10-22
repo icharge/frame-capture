@@ -264,7 +264,7 @@ async function run() {
     });
     assert(
       playable.width > 100 && playable.height > 100,
-      "recorded WebM must decode",
+      "recorded video must decode",
     );
     const recorded = await page.evaluate(async () =>
       (await window.frame.list()).find((c) => c.kind === "video"),
@@ -282,7 +282,7 @@ async function run() {
       .click();
     await app.evaluate(() => global.frameFixture.close());
     console.log(
-      "PASS native recording, pause/resume, local WebM playback, and video export",
+      "PASS native recording, pause/resume, local video playback, and video export",
     );
     await page
       .getByRole("button", { name: /All captures/ })
