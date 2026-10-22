@@ -1,0 +1,84 @@
+{
+  "name": "frame-capture",
+  "version": "0.1.1",
+  "description": "A local-first screenshot and screen recording workspace for macOS and Windows.",
+  "author": "Frame",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "test:desktop": "node tests/desktop.cjs",
+    "test:region": "node tests/region.cjs",
+    "test:dev": "node tests/dev.cjs",
+    "icons": "node scripts/make-icon.cjs",
+    "deps:check": "node scripts/check-deps.mjs",
+    "deps:update": "node scripts/check-deps.mjs --write && npm install",
+    "format": "prettier --write src electron tests scripts docs tokens.css index.html vite.config.ts tsconfig.json package.json README.md .github/workflows/build.yml",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 --x64"
+  },
+  "dependencies": {
+    "@fontsource/inter": "5.3.0",
+    "@fontsource/space-grotesk": "5.3.0",
+    "lucide-react": "1.61.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "10.0.6",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "wait-on": "9.5.1"
+  },
+  "build": {
+    "appId": "app.frame.capture",
+    "productName": "Frame",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "icon": "assets/icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "NSScreenCaptureUsageDescription": "Frame captures screenshots and records the screen you choose.",
+        "NSMicrophoneUsageDescription": "Frame uses your microphone when you enable narration."
+      }
+    }
+  }
+}
