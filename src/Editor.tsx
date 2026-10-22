@@ -296,7 +296,12 @@ export default function Editor({
       color,
       size,
       points: tool === "pen" ? [p] : undefined,
-      number: doc.marks.filter((m) => m.type === "step").length + 1,
+      number:
+        doc.marks.reduce(
+          (highest, m) =>
+            m.type === "step" ? Math.max(highest, m.number || 0) : highest,
+          0,
+        ) + 1,
     };
     if (tool === "step") {
       commit({ ...doc, marks: [...doc.marks, mark] });
@@ -403,6 +408,7 @@ export default function Editor({
   async function exportEdited() {
     if (busy) return;
     setBusy(true);
+    let temporaryId: string | undefined;
     try {
       const data = await rendered();
       const item = await api.save({
@@ -411,14 +417,23 @@ export default function Editor({
         bytes: fromDataUrl(data),
         ...(await imageDetails(data)),
       });
-      await api.exportFile(item.id, settings.format);
+      temporaryId = item.id;
+      if (!(await api.exportFile(item.id, settings.format))) {
+        await api.update(item.id, { deleted: true });
+        temporaryId = undefined;
+        return;
+      }
+      temporaryId = undefined;
       onSaved(item);
     } catch (e) {
+      if (temporaryId)
+        await api.update(temporaryId, { deleted: true }).catch(() => {});
       onError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+
   return (
     <div className="editor">
       <header className="editor-head">

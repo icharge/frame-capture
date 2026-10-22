@@ -9,7 +9,13 @@ async function main() {
     FRAME_DATA_DIR: path.join(root, ".frame-test-data", `region-${Date.now()}`),
   };
   delete env.ELECTRON_RUN_AS_NODE;
-  const instance = await electron.launch({ args: [root], env });
+  const instance = await electron.launch({
+    args: process.env.FRAME_EXECUTABLE ? [] : [root],
+    env,
+    ...(process.env.FRAME_EXECUTABLE
+      ? { executablePath: path.resolve(process.env.FRAME_EXECUTABLE) }
+      : {}),
+  });
   try {
     const page = await instance.firstWindow();
     page.setDefaultTimeout(15000);

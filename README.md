@@ -24,6 +24,8 @@ All direct npm dependencies are pinned to exact stable versions verified against
 
 ## What works
 
+See the [feature-by-feature audit](docs/feature-audit.md) for verified behavior, partial implementations, and the local CleanShot features still missing.
+
 - Screenshot capture: select a display, capture a window, or drag an area on a frozen display overlay. Frame steps aside before capturing.
 - Screen/window recording, pause/resume, optional microphone narration, and Windows system audio. Local MP4 (H.264/AAC) and WebM (VP9/Opus) playback and export, with native resolution preserved. A recording automatically stops near 220 MB to keep memory bounded.
 - Image editor: arrows, rectangles, ellipses, freehand drawing, text, numbered steps, highlighting, **opaque redaction**, cropping, background colors, padding, corners, and shadows.
@@ -97,6 +99,7 @@ The web preview stores files in this browser's IndexedDB. Browser data is separa
 npm test             # storage, recovery, geometry, recording presets, clock, and WebM headers
 npm run build        # TypeScript and production assets
 npm run test:desktop # Windows/macOS Electron UI and native capture workflows
+npm run test:editor  # every implemented editor tool, imports, crop, drafts, and export recovery
 npm run test:region  # native display and drag-to-select capture against an opaque test fixture
 npm run test:dev     # Vite development entry, React refresh/CSP, and local editor
 npm run test:recording # native MP4/WebM, synthetic audio, pause, seek, decode, and export
@@ -111,4 +114,4 @@ The Windows shortcut helper is built from `native/windows/ShortcutHost.cs` using
 
 The dedicated recording test and benchmark require `ffmpeg` and `ffprobe` on PATH for independent decoding and analysis. They capture a test fixture and synthesize narration without accessing the physical microphone. These tools are only test prerequisites and are not required by Frame itself.
 
-This is a working first version, not full CleanShot parity: scrolling/stitch capture, OCR, video trimming, GIF encoding, camera bubbles, and pinned image overlays are not implemented. macOS configuration is included, but it still needs native capture and permission testing on a Mac. Windows is the platform verified in this workspace.
+Frame covers the core capture/edit/export workflow, with substantial gaps from full CleanShot parity: area video recording, screenshot self-timer, scrolling/stitch capture, OCR, Quick Access/pinned overlays, image resize/rotate, editable project files, custom key rebinding, video trimming, GIF encoding, and camera bubbles are not implemented. macOS configuration is included, but it still needs native capture and permission testing on a Mac. Windows is the platform verified in this workspace.
